@@ -453,15 +453,13 @@
         ];
     }
 
-    function buildItemLikeDescriptors(dataArray) {
-        const list = [
-            {
-                name: "전체 무한 아이템 (소비 무시)",
-                type: "boolean",
-                get: () => CheatManager.isInfiniteItems(),
-                set: (v) => CheatManager.setInfiniteItems(v)
-            }
-        ];
+    // includeInfiniteToggle: 소모품(Items)만 "무한(소비 안 함)"이 의미가 있고,
+    // 장비(Armors/Weapons)는 통상 소모되지 않으므로 그 탭에서는 아예 노출하지
+    // 않는다. 무한 토글은 (전역 1개가 아니라) 아이템별로 개별 작동한다 -
+    // $dataItems 안에는 실제로는 소모되지 않는 특수 항목이 섞여 있을 수 있어
+    // 전역 스위치 하나로 묶으면 그런 항목에도 의도치 않게 영향을 주기 때문.
+    function buildItemLikeDescriptors(dataArray, includeInfiniteToggle) {
+        const list = [];
         if (!dataArray) return list;
         for (let i = 1; i < dataArray.length; i++) {
             const entry = dataArray[i];
@@ -485,6 +483,14 @@
                     }
                 }
             });
+            if (includeInfiniteToggle) {
+                list.push({
+                    name: `　└ 무한 (소비 안 함)`,
+                    type: "boolean",
+                    get: () => CheatManager.isItemInfinite(entry),
+                    set: (v) => CheatManager.setItemInfinite(entry, v)
+                });
+            }
         }
         // 가상화 페이징: Window_Selectable#drawAllItems는 topIndex()부터
         // maxPageItems()개만 그리므로, 이 목록이 아무리 길어도(수백 개) 실제로는
@@ -493,10 +499,10 @@
     }
 
     function buildItemsDescriptors() {
-        return buildItemLikeDescriptors(typeof $dataItems !== "undefined" ? $dataItems : null);
+        return buildItemLikeDescriptors(typeof $dataItems !== "undefined" ? $dataItems : null, true);
     }
     function buildArmorsDescriptors() {
-        return buildItemLikeDescriptors(typeof $dataArmors !== "undefined" ? $dataArmors : null);
+        return buildItemLikeDescriptors(typeof $dataArmors !== "undefined" ? $dataArmors : null, false);
     }
 
     function buildSkillsDescriptors(scene) {
@@ -615,6 +621,15 @@
             this._descriptors = list || [];
             this.refresh();
             this.select(this._descriptors.length > 0 ? 0 : -1);
+            // MV의 select()는 내부적으로 ensureCursorVisible()을 호출해 스크롤을
+            // 자동으로 맞춰주지만, MZ의 select()는 커서 표시만 갱신할 뿐 스크롤은
+            // 건드리지 않는다(scrollTo는 cursorDown/Up 등에서만 호출됨). 그 결과
+            // 이전 탭에서 목록을 한참 내려본 뒤 탭을 전환하면 스크롤 위치가 그대로
+            // 남아 있다가 다음 방향키 입력 때 MZ가 뒤늦게 부드러운 스크롤
+            // 애니메이션으로 보정하면서 화면이 위아래로 흔들리는 것처럼 보였다.
+            // 인자 없이 호출하면 MV/MZ 모두 안전하고(둘 다 시그니처 호환),
+            // MZ에서는 smooth 인자가 없어 애니메이션 없이 즉시 스크롤을 맞춘다.
+            this.ensureCursorVisible();
             this.callUpdateHelp();
         }
         setChangeHandler(handler) {

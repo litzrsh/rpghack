@@ -215,7 +215,7 @@ var CheatManager = CheatManager || null;
                 moveSpeedMultiplier: 1,
                 gameSpeedMultiplier: 1,
                 statMultipliers: Object.create(null), // paramId -> multiplier
-                infiniteItems: false,
+                infiniteItemKeys: new Set(), // "I1"/"W1"/"A1" -> 개별 아이템 단위 무한(소비 무시) 플래그
                 lockedItems: new Map() // "I1"/"W1"/"A1" -> { item, amount }
             };
             this._defaultDeltaTime = null; // SceneManager._deltaTime 원본 값 (지연 캡처)
@@ -311,11 +311,23 @@ var CheatManager = CheatManager || null;
         }
 
         // ================= Items / Armors =================
-        setInfiniteItems(flag) {
-            this._state.infiniteItems = !!flag;
+        /**
+         * 아이템별로 "소비해도 줄어들지 않음"을 켜고 끈다. 장비(무기/방어구)는
+         * 통상적으로 소모되지 않으므로 이 API는 소모품 위주로 사용을 권장한다.
+         * (예전의 전역 setInfiniteItems()는 $dataItems 안에 실제 소모되지 않는
+         * 항목이 섞여 있을 수 있어 개별 아이템 단위 제어로 대체되었다.)
+         */
+        setItemInfinite(item, flag) {
+            if (!item) return;
+            const key = this._itemKey(item);
+            if (flag) {
+                this._state.infiniteItemKeys.add(key);
+            } else {
+                this._state.infiniteItemKeys.delete(key);
+            }
         }
-        isInfiniteItems() {
-            return this._state.infiniteItems;
+        isItemInfinite(item) {
+            return item ? this._state.infiniteItemKeys.has(this._itemKey(item)) : false;
         }
 
         /** 특정 아이템/무기/방어구의 보유 수량을 고정값으로 고정한다. */
@@ -366,15 +378,26 @@ var CheatManager = CheatManager || null;
         }
 
         // ================= Persistence (Save/Load) =================
+        _itemRefToKind(item) {
+            return DataManager.isWeapon(item) ? "W" : DataManager.isArmor(item) ? "A" : "I";
+        }
+        _lookupItemByKind(kind, id) {
+            const table = kind === "W" ? $dataWeapons : kind === "A" ? $dataArmors : $dataItems;
+            return table && table[id];
+        }
         /** 세이브 파일에 안전하게 넣을 수 있는 순수 JSON 스냅샷을 만든다. */
         serialize() {
             const lockedItems = [];
             this._state.lockedItems.forEach((entry) => {
                 lockedItems.push({
-                    kind: DataManager.isWeapon(entry.item) ? "W" : DataManager.isArmor(entry.item) ? "A" : "I",
+                    kind: this._itemRefToKind(entry.item),
                     id: entry.item.id,
                     amount: entry.amount
                 });
+            });
+            const infiniteItems = [];
+            this._state.infiniteItemKeys.forEach((key) => {
+                infiniteItems.push({ kind: key[0], id: Number(key.slice(1)) });
             });
             return {
                 messageSkip: this._state.messageSkip,
@@ -383,7 +406,7 @@ var CheatManager = CheatManager || null;
                 moveSpeedMultiplier: this._state.moveSpeedMultiplier,
                 gameSpeedMultiplier: this._state.gameSpeedMultiplier,
                 statMultipliers: Object.assign({}, this._state.statMultipliers),
-                infiniteItems: this._state.infiniteItems,
+                infiniteItems,
                 lockedItems
             };
         }
@@ -398,7 +421,6 @@ var CheatManager = CheatManager || null;
             this.setInstantKillMode(data.instantKillMode);
             this.setMoveSpeedMultiplier(data.moveSpeedMultiplier);
             this.setGameSpeed(data.gameSpeedMultiplier);
-            this.setInfiniteItems(data.infiniteItems);
 
             this.clearStatMultipliers();
             if (data.statMultipliers) {
@@ -409,9 +431,14 @@ var CheatManager = CheatManager || null;
 
             this._state.lockedItems.clear();
             (data.lockedItems || []).forEach((entry) => {
-                const table = entry.kind === "W" ? $dataWeapons : entry.kind === "A" ? $dataArmors : $dataItems;
-                const item = table && table[entry.id];
+                const item = this._lookupItemByKind(entry.kind, entry.id);
                 if (item) this.lockItemQuantity(item, entry.amount);
+            });
+
+            this._state.infiniteItemKeys.clear();
+            (data.infiniteItems || []).forEach((entry) => {
+                const item = this._lookupItemByKind(entry.kind, entry.id);
+                if (item) this.setItemInfinite(item, true);
             });
         }
         /** 치트 상태를 전부 기본값으로 안전하게 되돌린다 (새 게임 시작, 미저장 로드 등). */
@@ -419,7 +446,7 @@ var CheatManager = CheatManager || null;
             this.setMessageSkip(false);
             this.setGodMode(false);
             this.setInstantKillMode(false);
-            this.setInfiniteItems(false);
+            this._state.infiniteItemKeys.clear();
             this.clearStatMultipliers();
             this._state.lockedItems.clear();
             this.setMoveSpeedMultiplier(1);
@@ -526,8 +553,8 @@ var CheatManager = CheatManager || null;
             Game_Party.prototype.gainItem = function (item, amount, includeEquip) {
                 if (!item) return;
 
-                if (manager.isInfiniteItems() && amount < 0) {
-                    return; // 소비(감소)만 무시하여 사실상 무한 아이템으로 동작
+                if (amount < 0 && manager.isItemInfinite(item)) {
+                    return; // 이 아이템의 소비(감소)만 무시하여 사실상 무한 아이템으로 동작
                 }
 
                 _gainItem.call(this, item, amount, includeEquip);
