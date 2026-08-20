@@ -283,6 +283,7 @@
     }
 
     const PARAM_NAMES = ["최대HP", "최대MP", "공격력", "방어력", "마법력", "마법방어", "민첩성", "운"];
+    const SKILLS_TAB_COLUMNS = 4;
 
     //-------------------------------------------------------------------
     // 파티원별 파라미터 증감 값을 기억해 두는 장부.
@@ -509,6 +510,11 @@
         const actor = scene.actor();
         if (!actor || typeof $dataSkills === "undefined" || !$dataSkills) return [];
         const list = [{ name: `대상: ${actor.name()}`, type: "info", get: () => "" }];
+        // 4열 그리드에서는 인덱스 순서대로 칸이 채워지므로, 안내 행이 스킬 1~3과
+        // 같은 줄에 끼어 보이지 않도록 다음 행 경계까지 빈 칸으로 채워 둔다.
+        while (list.length % SKILLS_TAB_COLUMNS !== 0) {
+            list.push({ name: "", type: "info", get: () => "" });
+        }
         for (let i = 1; i < $dataSkills.length; i++) {
             const skill = $dataSkills[i];
             if (!skill || !skill.name) continue;
@@ -539,13 +545,15 @@
 
     // 탭 활성화 파라미터로 필터링한다. 전부 꺼져 있으면(설정 실수 등) 빈 메뉴가
     // 되어버리는 것을 막기 위해 안전하게 전체 탭을 되살린다.
+    // listWidthRatio: 좌측 목록 창이 전체 폭에서 차지하는 비율(우측 상세 창은
+    // 나머지). columns: 목록을 몇 열 그리드로 배치할지(Skills는 4열 그리드).
     const ALL_TABS = [
-        { name: "General", enabled: paramBool(PARAMS, "enableGeneralTab", true), builder: buildGeneralDescriptors },
-        { name: "Party", enabled: paramBool(PARAMS, "enablePartyTab", true), builder: buildPartyDescriptors },
-        { name: "Items", enabled: paramBool(PARAMS, "enableItemsTab", true), builder: buildItemsDescriptors },
-        { name: "Armors", enabled: paramBool(PARAMS, "enableArmorsTab", true), builder: buildArmorsDescriptors },
-        { name: "Skills", enabled: paramBool(PARAMS, "enableSkillsTab", true), builder: buildSkillsDescriptors },
-        { name: "Variables", enabled: paramBool(PARAMS, "enableVariablesTab", true), builder: buildVariablesDescriptors }
+        { name: "General", enabled: paramBool(PARAMS, "enableGeneralTab", true), builder: buildGeneralDescriptors, listWidthRatio: 0.4, columns: 1 },
+        { name: "Party", enabled: paramBool(PARAMS, "enablePartyTab", true), builder: buildPartyDescriptors, listWidthRatio: 0.4, columns: 1 },
+        { name: "Items", enabled: paramBool(PARAMS, "enableItemsTab", true), builder: buildItemsDescriptors, listWidthRatio: 0.6, columns: 1 },
+        { name: "Armors", enabled: paramBool(PARAMS, "enableArmorsTab", true), builder: buildArmorsDescriptors, listWidthRatio: 0.6, columns: 1 },
+        { name: "Skills", enabled: paramBool(PARAMS, "enableSkillsTab", true), builder: buildSkillsDescriptors, listWidthRatio: 0.78, columns: SKILLS_TAB_COLUMNS },
+        { name: "Variables", enabled: paramBool(PARAMS, "enableVariablesTab", true), builder: buildVariablesDescriptors, listWidthRatio: 0.4, columns: 1 }
     ];
     const FILTERED_TABS = ALL_TABS.filter((tab) => tab.enabled);
     const ACTIVE_TABS = FILTERED_TABS.length > 0 ? FILTERED_TABS : ALL_TABS;
@@ -597,6 +605,7 @@
         // makeCommandList()가 즉시 호출되므로) 반드시 super 호출 이전에 세팅한다.
         initialize(x, y, width, height) {
             this._descriptors = [];
+            this._columns = 1;
             this._cheatWidth = width;
             this._cheatHeight = height;
             if (RpgBridge.isMZ) {
@@ -611,14 +620,22 @@
         windowHeight() {
             return this._cheatHeight || Graphics.boxHeight - panelHeight(1);
         }
+        maxCols() {
+            return this._columns || 1;
+        }
         makeCommandList() {
             for (const desc of this._descriptors) {
                 const enabled = desc.type !== "info";
                 this.addCommand(desc.name, "select", enabled, desc);
             }
         }
-        setDescriptors(list) {
+        // columns: 1이면 기존처럼 세로 한 줄 목록, 그 이상이면(Skills 탭의 4열
+        // 그리드 등) 가로 N열 그리드로 배치한다. maxCols()가 이 값을 그대로
+        // 반환하므로 Window_Selectable의 기본 itemWidth()/itemRect() 계산이
+        // 자동으로 N등분된 열 폭을 만들어 준다.
+        setDescriptors(list, columns) {
             this._descriptors = list || [];
+            this._columns = columns || 1;
             this.refresh();
             this.select(this._descriptors.length > 0 ? 0 : -1);
             // MV의 select()는 내부적으로 ensureCursorVisible()을 호출해 스크롤을
@@ -639,13 +656,45 @@
         callUpdateHelp() {
             if (this._changeHandler) this._changeHandler();
         }
+        // Window_Command#drawItem 기본 구현에 의존하지 않고 직접 그린다: MV는
+        // itemTextAlign()이 "left", MZ는 "center"라서 그리드 칸에서 이름과
+        // 값/상태 표시가 서로 다르게 겹칠 수 있기 때문에, 두 엔진 모두 동일하게
+        // "이름은 왼쪽부터, 값/상태는 오른쪽부터" 규칙으로 통일한다.
         drawItem(index) {
-            super.drawItem(index);
             const desc = this._list[index] && this._list[index].ext;
-            if (!desc || desc.type === "info") return;
+            if (!desc) return;
             const rect = RpgBridge.itemLineRect(this, index);
+            this.changePaintOpacity(this.isCommandEnabled(index));
             this.resetTextColor();
-            this.drawText(this._formatValue(desc), rect.x, rect.y, rect.width, "right");
+
+            if (desc.type === "info") {
+                this.drawText(desc.name, rect.x, rect.y, rect.width, "left");
+            } else if (desc.type === "item") {
+                // "값 컬럼"과 "고정 컬럼"을 하나로 합친 문자열이 아니라 서로 다른
+                // 고정폭 열로 분리해서, 고정 여부 표시가 항상 값 컬럼 오른쪽의
+                // 정해진 자리에 오도록 한다.
+                const fixedColWidth = 76;
+                const valueColWidth = 64;
+                const nameWidth = Math.max(0, rect.width - valueColWidth - fixedColWidth);
+                this.drawText(desc.name, rect.x, rect.y, nameWidth, "left");
+                this.drawText(`${desc.get()}`, rect.x + nameWidth, rect.y, valueColWidth, "right");
+                if (desc.isFixed99()) {
+                    this.changeTextColor(RpgBridge.textColor(this, 17)); // "강화(powerUp)" 색상 재사용
+                    this.drawText("FIXED", rect.x + nameWidth + valueColWidth, rect.y, fixedColWidth, "right");
+                    this.resetTextColor();
+                }
+            } else if (this._columns > 1) {
+                // 그리드(예: Skills 4xN): 좁은 칸 안에 이름 + 짧은 ON/OFF 표시.
+                const indicatorWidth = 56;
+                const nameWidth = Math.max(0, rect.width - indicatorWidth);
+                this.drawText(desc.name, rect.x, rect.y, nameWidth, "left");
+                this.drawText(this._formatValue(desc), rect.x + nameWidth, rect.y, indicatorWidth, "right");
+            } else {
+                this.drawText(desc.name, rect.x, rect.y, rect.width, "left");
+                this.drawText(this._formatValue(desc), rect.x, rect.y, rect.width, "right");
+            }
+
+            this.changePaintOpacity(true);
         }
         _formatValue(desc) {
             const value = desc.get();
@@ -1017,9 +1066,29 @@
             this.onTabChange();
             this._commandWindow.activate();
         }
+        // 탭마다 목록/상세 창의 폭 배분을 다시 계산한다. Items/Armors는 값+FIXED
+        // 두 열을 나란히 보여주려고, Skills는 4열 그리드를 위해 목록 창에 더
+        // 넓은 영역을 준다(그만큼 상세 창은 좁아진다).
+        _layoutWindowsForTab(tab) {
+            const ratio = tab ? tab.listWidthRatio : 0.4;
+            const y = this._tabWindow.height;
+            const height = Graphics.boxHeight - y;
+            const listWidth = Math.floor(Graphics.boxWidth * ratio);
+            const controlWidth = Graphics.boxWidth - listWidth;
+
+            this._commandWindow.move(0, y, listWidth, height);
+            this._valueEditWindow.move(listWidth, y, controlWidth, height);
+            // Window_CheatCommand는 곧이어 호출되는 setDescriptors()->refresh()가
+            // Window_Command#refresh() 안에서 createContents()를 다시 호출해
+            // 주므로 여기서 따로 처리할 필요가 없다. Window_CheatValueEdit는
+            // refresh()를 직접 구현해서 createContents()를 부르지 않으므로,
+            // 새 크기의 컨텐츠 비트맵을 여기서 직접 다시 만들어야 한다.
+            this._valueEditWindow.createContents();
+        }
         onTabChange() {
             const tab = ACTIVE_TABS[this._tabWindow.index()];
-            this._commandWindow.setDescriptors(tab ? tab.builder(this) : []);
+            this._layoutWindowsForTab(tab);
+            this._commandWindow.setDescriptors(tab ? tab.builder(this) : [], tab ? tab.columns : 1);
         }
         onCommandChange() {
             const desc = this._commandWindow.currentExt();
@@ -1035,6 +1104,16 @@
         onCommandOk() {
             const desc = this._commandWindow.currentExt();
             if (!desc || desc.type === "info") {
+                this._commandWindow.activate();
+                return;
+            }
+            // 토글(boolean)은 우측 상세 창으로 넘어갈 필요 없이 목록에서 Z로
+            // 바로 켜고 끈다. processOk()가 이미 이 창을 deactivate() 했으므로
+            // 다시 activate()해서 포커스를 목록에 그대로 둔다.
+            if (desc.type === "boolean") {
+                desc.set(!desc.get());
+                this._commandWindow.refresh();
+                this._valueEditWindow.refresh();
                 this._commandWindow.activate();
                 return;
             }
