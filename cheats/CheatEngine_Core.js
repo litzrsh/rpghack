@@ -2,8 +2,63 @@
 // CheatEngine_Core.js
 //=============================================================================
 /*:
- * @plugindesc [Cheat Engine] Core v1.0.0 - RPG Maker MV/MZ 공통 치트 엔진 코어 모듈 (UI 없음)
+ * @plugindesc [Cheat Engine] Core v1.2.0 - Pure-logic cheat engine core for RPG Maker MV/MZ (no UI).
  * @author rpghack
+ * @url
+ *
+ * @param persistCheatStateOnLoad
+ * @text Persist Cheat State On Load
+ * @type boolean
+ * @on Persist
+ * @off Reset
+ * @default false
+ * @desc If ON, cheat flags (speed, God Mode, etc.) are saved into the save file and restored on load.
+ * If OFF, they are always safely reset to default right after loading.
+ *
+ * @help
+ * CheatEngine_Core.js
+ * -----------------------------------------------------------------------------
+ * A pure-logic cheat engine core for RPG Maker MV / MZ. Draws no Window/Scene
+ * of its own; exposes the global objects window.RpgBridge / window.CheatManager
+ * for a UI plugin (e.g. CheatEngine_UI.js) or your own scripts to call.
+ *
+ * Installation:
+ *   - Separate-file install: place this file ABOVE CheatEngine_UI.js (or any
+ *     other consumer) in the Plugin Manager list, and enable both.
+ *   - Single-file (combined) install: this file's body may be concatenated
+ *     with CheatEngine_UI.js's body into one .js file. Both halves resolve
+ *     their own plugin name from the currently executing <script> tag
+ *     (document.currentScript), so parameter lookup keeps working either way;
+ *     if the combined file's header doesn't carry BOTH plugins' @param blocks,
+ *     each half simply falls back to its documented defaults.
+ *
+ * Data validation:
+ *   - All public setters (gold, game speed, move speed, stat multiplier, item
+ *     quantity lock, number variable, ...) reject non-finite input and clamp
+ *     to a safe range (e.g. gold is clamped to $gameParty.maxGold()) so a bad
+ *     value from a UI or script call can never corrupt game state.
+ *
+ * Save/Load behavior:
+ *   - Controlled by the "Persist Cheat State On Load" parameter above.
+ *   - Starting a brand new game always resets cheat state, regardless of the
+ *     parameter (there is nothing to restore).
+ *
+ * Plugin Command: none (pure script API).
+ * -----------------------------------------------------------------------------
+ */
+/*:ko
+ * @plugindesc [치트 엔진] Core v1.2.0 - RPG Maker MV/MZ 공통 치트 엔진 코어 모듈 (UI 없음)
+ * @author rpghack
+ * @url
+ *
+ * @param persistCheatStateOnLoad
+ * @text 로드 시 치트 상태 유지
+ * @type boolean
+ * @on 유지
+ * @off 리셋
+ * @default false
+ * @desc true(유지)면 배속/God Mode 등 치트 상태가 세이브 파일에 저장되어 로드 시 복원됩니다.
+ * false(리셋)면 로드 직후 항상 안전하게 기본값으로 초기화됩니다.
  *
  * @help
  * CheatEngine_Core.js
@@ -11,16 +66,32 @@
  * RPG Maker MV / MZ에서 공통으로 사용하는 치트 엔진의 코어 모듈입니다.
  *
  * 이 플러그인은 어떠한 Window/Scene도 직접 그리지 않습니다. 대신 다른 치트 UI
- * 플러그인이 사용할 수 있도록 전역 객체 window.RpgBridge / window.CheatManager
- * 를 노출하는 "순수 로직 라이브러리" 입니다.
+ * 플러그인(예: CheatEngine_UI.js)이나 직접 작성한 스크립트가 사용할 수 있도록
+ * 전역 객체 window.RpgBridge / window.CheatManager 를 노출하는
+ * "순수 로직 라이브러리" 입니다.
  *
- * 사용법:
- *   1) 플러그인 목록에서 이 플러그인을 다른 Cheat UI 플러그인보다 위쪽(먼저
- *      로드되도록) 배치하세요.
- *   2) 다른 플러그인에서 CheatManager.setGodMode(true) 처럼 API를 직접
- *      호출하거나, 입력 이벤트 핸들러에서 호출하십시오.
+ * 설치 방법:
+ *   1) 분리형 설치: 플러그인 목록에서 이 플러그인을 CheatEngine_UI.js(또는 이
+ *      Core를 사용하는 다른 플러그인)보다 위쪽(먼저 로드되도록) 배치하고 둘 다
+ *      켜(ON) 두세요.
+ *   2) 단일 파일(결합형) 설치: 이 파일의 본문과 CheatEngine_UI.js의 본문을 하나의
+ *      .js 파일로 이어 붙여도 됩니다. 두 코드 블록 모두 자신이 실제로 실행되고
+ *      있는 <script> 태그(document.currentScript)를 통해 스스로의 플러그인
+ *      이름을 알아내므로, 합쳐진 파일이 두 플러그인의 @param을 모두 포함하지
+ *      않더라도 각자 문서화된 기본값으로 안전하게 동작합니다.
  *
- * Plugin Command 없음 / Parameter 없음.
+ * 비정상 데이터 방지:
+ *   - 골드/게임 배속/이동 배율/스탯 배율/아이템 수량 고정/숫자 변수 등 모든
+ *     공개 setter는 숫자가 아니거나(NaN/Infinity) 범위를 벗어난 입력을 걸러내고
+ *     안전한 범위로 clamp합니다(예: 골드는 $gameParty.maxGold()를 넘지 않음).
+ *     UI나 스크립트에서 어떤 값을 넘기더라도 게임 상태가 깨지지 않습니다.
+ *
+ * 세이브/로드 동작:
+ *   - 위 "로드 시 치트 상태 유지" 파라미터로 제어됩니다.
+ *   - 새 게임을 시작하면 파라미터 설정과 무관하게 항상 치트 상태가 초기화됩니다
+ *     (복원할 세이브 데이터 자체가 없으므로).
+ *
+ * Plugin Command 없음 (순수 스크립트 API).
  * -----------------------------------------------------------------------------
  */
 
@@ -29,6 +100,28 @@ var CheatManager = CheatManager || null;
 
 (() => {
     "use strict";
+
+    //-------------------------------------------------------------------
+    // 플러그인 이름 동적 해석 (분리형/결합형 설치 양쪽 대응)
+    // PluginManager.parameters(name)는 plugins.js에 등록된 파일명(확장자 제외)을
+    // 키로 사용한다. document.currentScript는 "지금 실행 중인 <script> 태그"를
+    // 가리키므로, 파일을 분리해서 쓰든 다른 파일과 합쳐서 쓰든 항상 자기 자신이
+    // 실제로 로드된 파일명을 정확히 알아낼 수 있다.
+    //-------------------------------------------------------------------
+    function resolvePluginName(fallback) {
+        const src = document.currentScript && document.currentScript.src;
+        const match = src && src.match(/([^/\\]+)\.js(?:\?.*)?$/);
+        return match ? match[1] : fallback;
+    }
+    function paramBool(params, key, defaultValue) {
+        const raw = params[key];
+        if (raw === undefined || raw === "") return defaultValue;
+        return raw === true || raw === "true";
+    }
+
+    const PLUGIN_NAME = resolvePluginName("CheatEngine_Core");
+    const PARAMS = (typeof PluginManager !== "undefined" ? PluginManager.parameters(PLUGIN_NAME) : {}) || {};
+    const PERSIST_CHEAT_STATE_ON_LOAD = paramBool(PARAMS, "persistCheatStateOnLoad", false);
 
     //-------------------------------------------------------------------
     // RpgBridge : MV / MZ 공통 추상화 계층
@@ -132,7 +225,8 @@ var CheatManager = CheatManager || null;
         // ================= General =================
         setGold(amount) {
             if (typeof $gameParty === "undefined" || !$gameParty) return;
-            $gameParty._gold = Math.max(0, Math.floor(Number(amount) || 0));
+            const maxGold = typeof $gameParty.maxGold === "function" ? $gameParty.maxGold() : 99999999;
+            $gameParty._gold = CheatManagerClass._clampFinite(amount, 0, maxGold, $gameParty.gold());
         }
         getGold() {
             return typeof $gameParty !== "undefined" && $gameParty ? $gameParty.gold() : 0;
@@ -143,9 +237,11 @@ var CheatManager = CheatManager || null;
          * 배율만큼 줄여서, 실시간 1초당 게임 로직(update)이 더 많이 도는
          * 방식으로 배속을 구현한다. (렌더링 프레임과 무관하게 MV/MZ 모두
          * 동일한 accumulator 구조를 사용하므로 안전하게 동작한다.)
+         * 0에 가까운 값이나 과도하게 큰 값은 update 폭주/정지를 유발할 수 있어
+         * [0.05, 32] 범위로 clamp한다.
          */
         setGameSpeed(multiplier) {
-            const m = Math.max(0.01, Number(multiplier) || 1);
+            const m = CheatManagerClass._clampFinite(multiplier, 0.05, 32, this._state.gameSpeedMultiplier);
             if (this._defaultDeltaTime === null && typeof SceneManager !== "undefined") {
                 this._defaultDeltaTime = SceneManager._deltaTime;
             }
@@ -159,7 +255,7 @@ var CheatManager = CheatManager || null;
         }
 
         setMoveSpeedMultiplier(multiplier) {
-            this._state.moveSpeedMultiplier = Math.max(0, Number(multiplier) || 1);
+            this._state.moveSpeedMultiplier = CheatManagerClass._clampFinite(multiplier, 0, 16, this._state.moveSpeedMultiplier);
         }
         getMoveSpeedMultiplier() {
             return this._state.moveSpeedMultiplier;
@@ -198,7 +294,8 @@ var CheatManager = CheatManager || null;
         }
 
         setStatMultiplier(paramId, multiplier) {
-            this._state.statMultipliers[paramId] = Number(multiplier) || 1;
+            const current = this.getStatMultiplier(paramId);
+            this._state.statMultipliers[paramId] = CheatManagerClass._clampFinite(multiplier, 0, 50, current);
         }
         getStatMultiplier(paramId) {
             const v = this._state.statMultipliers[paramId];
@@ -224,9 +321,10 @@ var CheatManager = CheatManager || null;
         /** 특정 아이템/무기/방어구의 보유 수량을 고정값으로 고정한다. */
         lockItemQuantity(item, amount) {
             if (!item) return;
-            this._state.lockedItems.set(this._itemKey(item), { item, amount: Math.max(0, Math.floor(amount)) });
+            const safeAmount = CheatManagerClass._clampFinite(amount, 0, 9999, 0);
+            this._state.lockedItems.set(this._itemKey(item), { item, amount: safeAmount });
             const container = RpgBridge.itemContainer(item);
-            if (container) container[item.id] = Math.max(0, Math.floor(amount));
+            if (container) container[item.id] = safeAmount;
         }
         unlockItemQuantity(item) {
             if (!item) return;
@@ -243,11 +341,12 @@ var CheatManager = CheatManager || null;
         // ================= Variables =================
         getNumberVariable(id) {
             if (typeof $gameVariables === "undefined" || !$gameVariables) return 0;
-            return Number($gameVariables.value(id)) || 0;
+            const v = Number($gameVariables.value(id));
+            return Number.isFinite(v) ? v : 0;
         }
         setNumberVariable(id, value) {
             if (typeof $gameVariables === "undefined" || !$gameVariables) return;
-            $gameVariables.setValue(id, Number(value) || 0);
+            $gameVariables.setValue(id, CheatManagerClass._clampFinite(value, -99999999, 99999999, this.getNumberVariable(id)));
         }
         getBooleanVariable(id) {
             if (typeof $gameVariables === "undefined" || !$gameVariables) return false;
@@ -266,6 +365,67 @@ var CheatManager = CheatManager || null;
             $gameSwitches.setValue(id, !!value);
         }
 
+        // ================= Persistence (Save/Load) =================
+        /** 세이브 파일에 안전하게 넣을 수 있는 순수 JSON 스냅샷을 만든다. */
+        serialize() {
+            const lockedItems = [];
+            this._state.lockedItems.forEach((entry) => {
+                lockedItems.push({
+                    kind: DataManager.isWeapon(entry.item) ? "W" : DataManager.isArmor(entry.item) ? "A" : "I",
+                    id: entry.item.id,
+                    amount: entry.amount
+                });
+            });
+            return {
+                messageSkip: this._state.messageSkip,
+                godMode: this._state.godMode,
+                instantKillMode: this._state.instantKillMode,
+                moveSpeedMultiplier: this._state.moveSpeedMultiplier,
+                gameSpeedMultiplier: this._state.gameSpeedMultiplier,
+                statMultipliers: Object.assign({}, this._state.statMultipliers),
+                infiniteItems: this._state.infiniteItems,
+                lockedItems
+            };
+        }
+        /** serialize()가 만든 스냅샷으로부터 상태를 복원한다. */
+        deserialize(data) {
+            if (!data) {
+                this.resetSessionState();
+                return;
+            }
+            this.setMessageSkip(data.messageSkip);
+            this.setGodMode(data.godMode);
+            this.setInstantKillMode(data.instantKillMode);
+            this.setMoveSpeedMultiplier(data.moveSpeedMultiplier);
+            this.setGameSpeed(data.gameSpeedMultiplier);
+            this.setInfiniteItems(data.infiniteItems);
+
+            this.clearStatMultipliers();
+            if (data.statMultipliers) {
+                for (const paramId of Object.keys(data.statMultipliers)) {
+                    this.setStatMultiplier(paramId, data.statMultipliers[paramId]);
+                }
+            }
+
+            this._state.lockedItems.clear();
+            (data.lockedItems || []).forEach((entry) => {
+                const table = entry.kind === "W" ? $dataWeapons : entry.kind === "A" ? $dataArmors : $dataItems;
+                const item = table && table[entry.id];
+                if (item) this.lockItemQuantity(item, entry.amount);
+            });
+        }
+        /** 치트 상태를 전부 기본값으로 안전하게 되돌린다 (새 게임 시작, 미저장 로드 등). */
+        resetSessionState() {
+            this.setMessageSkip(false);
+            this.setGodMode(false);
+            this.setInstantKillMode(false);
+            this.setInfiniteItems(false);
+            this.clearStatMultipliers();
+            this._state.lockedItems.clear();
+            this.setMoveSpeedMultiplier(1);
+            this.setGameSpeed(1);
+        }
+
         // ================= internal hooks =================
         _installHooks() {
             this._hookMessageSkip();
@@ -274,6 +434,7 @@ var CheatManager = CheatManager || null;
             this._hookStatMultiplier();
             this._hookMoveSpeed();
             this._hookGainItem();
+            this._hookSaveLoad();
         }
 
         // 메시지 창의 "확인 입력 감지"를 강제로 true 처리하여 자동 스킵 구현
@@ -377,6 +538,52 @@ var CheatManager = CheatManager || null;
                     if (container) container[item.id] = lock.amount;
                 }
             };
+        }
+
+        // 세이브 데이터에 치트 상태를 (설정에 따라) 함께 저장/복원하고,
+        // 새 게임 시작 시에는 항상 안전하게 초기화한다.
+        _hookSaveLoad() {
+            if (typeof DataManager === "undefined") return;
+            const manager = this;
+
+            const _makeSaveContents = DataManager.makeSaveContents;
+            DataManager.makeSaveContents = function () {
+                const contents = _makeSaveContents.call(this);
+                if (PERSIST_CHEAT_STATE_ON_LOAD) {
+                    contents.cheatEngine = manager.serialize();
+                }
+                return contents;
+            };
+
+            const _extractSaveContents = DataManager.extractSaveContents;
+            DataManager.extractSaveContents = function (contents) {
+                _extractSaveContents.call(this, contents);
+                if (PERSIST_CHEAT_STATE_ON_LOAD && contents && contents.cheatEngine) {
+                    manager.deserialize(contents.cheatEngine);
+                } else {
+                    manager.resetSessionState();
+                }
+            };
+
+            if (typeof DataManager.setupNewGame === "function") {
+                const _setupNewGame = DataManager.setupNewGame;
+                DataManager.setupNewGame = function () {
+                    _setupNewGame.call(this);
+                    manager.resetSessionState();
+                };
+            }
+        }
+
+        // ================= internal helpers =================
+        /**
+         * value를 숫자로 강제 변환해 [min, max] 범위로 clamp한다. NaN/Infinity 등
+         * 비정상 입력이면 fallback(보통 "현재 값")을 그대로 사용해 절대 게임
+         * 상태를 깨뜨리지 않는다.
+         */
+        static _clampFinite(value, min, max, fallback) {
+            const n = Number(value);
+            if (!Number.isFinite(n)) return fallback;
+            return Math.min(max, Math.max(min, n));
         }
     }
 
