@@ -1009,6 +1009,9 @@
             this._numberInputWindow.setHandler("ok", this.onNumberInputOk.bind(this));
             this._numberInputWindow.setHandler("cancel", this.onNumberInputCancel.bind(this));
 
+            // 시작 탭(보통 첫 번째 활성 탭)에 맞는 폭 배분을 최초 1회 적용한다.
+            // 이후에는 onTabOk()에서 탭을 확정할 때만 다시 계산한다.
+            this._layoutWindowsForTab(ACTIVE_TABS[this._tabWindow.index()]);
             this.onTabChange();
             this._commandWindow.deactivate();
             this._valueEditWindow.deactivate();
@@ -1085,9 +1088,14 @@
             // 새 크기의 컨텐츠 비트맵을 여기서 직접 다시 만들어야 한다.
             this._valueEditWindow.createContents();
         }
+        // 탭 바를 좌우로 훑어보는 동안(아직 확정 전) 목록 "내용"만 미리 보여주고
+        // 창 크기는 건드리지 않는다. 예전에는 여기서 매번 _layoutWindowsForTab()을
+        // 호출했는데, 탭 바 위에서 방향키를 누를 때마다(탭을 실제로 선택하기도
+        // 전에) 목록/상세 창 경계가 탭마다 다른 폭 비율로 계속 다시 계산되어
+        // 화면이 흔들리는 것처럼 보였다. 크기 변경은 onTabOk()에서 탭을 확정할
+        // 때 한 번만 적용한다.
         onTabChange() {
             const tab = ACTIVE_TABS[this._tabWindow.index()];
-            this._layoutWindowsForTab(tab);
             this._commandWindow.setDescriptors(tab ? tab.builder(this) : [], tab ? tab.columns : 1);
         }
         onCommandChange() {
@@ -1095,6 +1103,8 @@
             this._valueEditWindow.setDescriptor(desc);
         }
         onTabOk() {
+            const tab = ACTIVE_TABS[this._tabWindow.index()];
+            this._layoutWindowsForTab(tab);
             this._tabWindow.deactivate();
             this._commandWindow.activate();
         }
