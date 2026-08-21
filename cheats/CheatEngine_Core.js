@@ -2,7 +2,7 @@
 // CheatEngine_Core.js
 //=============================================================================
 /*:
- * @plugindesc [Cheat Engine] Core v1.2.0 - Pure-logic cheat engine core for RPG Maker MV/MZ (no UI).
+ * @plugindesc [Cheat Engine] Core v1.3.0 - Pure-logic cheat engine core for RPG Maker MV/MZ (no UI).
  * @author rpghack
  * @url
  *
@@ -47,7 +47,7 @@
  * -----------------------------------------------------------------------------
  */
 /*:ko
- * @plugindesc [치트 엔진] Core v1.2.0 - RPG Maker MV/MZ 공통 치트 엔진 코어 모듈 (UI 없음)
+ * @plugindesc [치트 엔진] Core v1.3.0 - RPG Maker MV/MZ 공통 치트 엔진 코어 모듈 (UI 없음)
  * @author rpghack
  * @url
  *
@@ -122,6 +122,14 @@ var CheatManager = CheatManager || null;
     const PLUGIN_NAME = resolvePluginName("CheatEngine_Core");
     const PARAMS = (typeof PluginManager !== "undefined" ? PluginManager.parameters(PLUGIN_NAME) : {}) || {};
     const PERSIST_CHEAT_STATE_ON_LOAD = paramBool(PARAMS, "persistCheatStateOnLoad", false);
+
+    // 메시지 초고속 스킵이 켜져 있고 메시지가 표시 중일 때, SceneManager의
+    // 고정 타임스텝(_deltaTime)을 이 값만큼 더 잘게 쪼갠다. MV/MZ 모두
+    // "실제 경과 시간 / _deltaTime"에 비례해 한 렌더 프레임 안에서 게임 로직
+    // update를 몇 번 도는지 정하므로(= setGameSpeed()가 배속을 구현하는 바로
+    // 그 메커니즘), 이렇게 하면 테스트 플레이의 Ctrl 키 초고속 스킵과 동등하거나
+    // 그 이상으로 한 프레임 안에 여러 번의 로직 업데이트가 몰아서 실행된다.
+    const MESSAGE_SKIP_BURST_DIVISOR = 8;
 
     //-------------------------------------------------------------------
     // RpgBridge : MV / MZ 공통 추상화 계층
@@ -464,14 +472,72 @@ var CheatManager = CheatManager || null;
             this._hookSaveLoad();
         }
 
-        // 메시지 창의 "확인 입력 감지"를 강제로 true 처리하여 자동 스킵 구현
+        // 메시지 초고속 스킵.
+        //   1) "확인 입력 감지"를 강제로 true 처리 -> 문장 끝 대기(pause) 즉시 해제
+        //   2) \.  \| 같은 대기 코드(startWait)를 0으로 바이패스
+        //   3) (현재 비활성화) 메시지가 떠 있는 동안 SceneManager의 로직
+        //      업데이트를 한 프레임에 여러 번 몰아서 실행하는 실험적 기능.
+        //      SceneManager.update를 감싸는 방식이라 부팅 직후(플레이어 입력
+        //      전부터) 매 프레임 실행되는 유일한 신규 코드라서, 검은 화면
+        //      부팅 멈춤 증상의 1순위 용의자로 지목되어 원인 확인 전까지
+        //      호출을 꺼 둔다. 문제없음이 확인되면 아래 줄의 주석만 풀면 된다.
         _hookMessageSkip() {
+            this._hookMessageSkipTrigger();
+            this._hookMessageSkipWait();
+            // this._hookMessageSkipBurstUpdate(); // TODO: 부팅 멈춤 원인 확인 후 재활성화
+        }
+
+        // 메시지 창의 "확인 입력 감지"를 강제로 true 처리하여 자동 진행 구현
+        _hookMessageSkipTrigger() {
             if (typeof Window_Message === "undefined") return;
             const manager = this;
             const _isTriggered = Window_Message.prototype.isTriggered;
             Window_Message.prototype.isTriggered = function () {
                 if (manager.isMessageSkip()) return true;
                 return _isTriggered.call(this);
+            };
+        }
+
+        // \.(0.25초) \|(1초) 같은 대기 코드가 만드는 startWait(count) 대기를
+        // 스킵 중에는 0으로 바이패스한다. MV는 Window_Message.prototype에,
+        // MZ는 Window_Base.prototype에 정의되어 있지만 프로토타입 체인을 통해
+        // 어느 쪽이든 Window_Message.prototype.startWait로 조회되므로, 이
+        // 하나의 지점만 감싸면 두 엔진 모두 안전하게 처리된다.
+        _hookMessageSkipWait() {
+            if (typeof Window_Message === "undefined" || typeof Window_Message.prototype.startWait !== "function") return;
+            const manager = this;
+            const target = Window_Message.prototype;
+            const _startWait = target.startWait;
+            target.startWait = function (count) {
+                _startWait.call(this, manager.isMessageSkip() ? 0 : count);
+            };
+        }
+
+        // 메시지가 표시 중(busy)이고 스킵이 켜져 있으면, 이번 한 프레임만
+        // SceneManager._deltaTime을 MESSAGE_SKIP_BURST_DIVISOR분의 1로 줄였다가
+        // 원래 값으로 되돌린다. setGameSpeed()로 이미 배속이 걸려 있어도(현재
+        // _deltaTime 값을 기준으로 다시 나누므로) 자연스럽게 곱으로 누적되며,
+        // 메시지가 끝나는 즉시(다음 프레임부터 busy가 false) 원래 속도로 복귀한다.
+        _hookMessageSkipBurstUpdate() {
+            if (typeof SceneManager === "undefined" || typeof SceneManager.update !== "function") return;
+            const manager = this;
+            const _update = SceneManager.update;
+            SceneManager.update = function () {
+                const messageBusy =
+                    manager.isMessageSkip() &&
+                    typeof $gameMessage !== "undefined" && $gameMessage &&
+                    typeof $gameMessage.isBusy === "function" && $gameMessage.isBusy();
+                if (!messageBusy || typeof this._deltaTime !== "number") {
+                    _update.call(this);
+                    return;
+                }
+                const savedDeltaTime = this._deltaTime;
+                this._deltaTime = savedDeltaTime / MESSAGE_SKIP_BURST_DIVISOR;
+                try {
+                    _update.call(this);
+                } finally {
+                    this._deltaTime = savedDeltaTime;
+                }
             };
         }
 

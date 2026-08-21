@@ -2,7 +2,7 @@
 // CheatEngine_UI.js
 //=============================================================================
 /*:
- * @plugindesc [Cheat Engine] UI v1.2.0 - In-game cheat menu UI consuming CheatEngine_Core.js.
+ * @plugindesc [Cheat Engine] UI v2.2.0 - In-game cheat menu UI consuming CheatEngine_Core.js.
  * @author rpghack
  * @base CheatEngine_Core
  * @orderAfter CheatEngine_Core
@@ -42,7 +42,7 @@
  * @text Enable "Party" Tab
  * @type boolean
  * @default true
- * @desc Show the Party tab (level/EXP/params/God Mode, in-battle enemy Instant Kill) in the tab bar.
+ * @desc Show the Party tab (every party member's level/EXP/params/full-heal/God Mode, in-battle enemy Instant Kill) in the tab bar.
  *
  * @param enableItemsTab
  * @text Enable "Items" Tab
@@ -87,16 +87,29 @@
  *   - Gamepad Start button, index 9 by default (configurable; can be disabled)
  *
  * Once open, standard controls:
- *   - Arrow keys : switch tab / move list selection / adjust value
- *   - Z (ok)     : toggle, cycle choice, big-step adjust, execute Instant Kill...
- *   - X (cancel) : go back one level
+ *   - Arrow keys : move tab bar cursor (2D, wraps to a 2nd row) / move
+ *                  content list cursor / adjust the highlighted value
+ *   - Z (ok)     : confirm tab -> enter content list, OR (inside the content
+ *                  list) toggle/cycle/big-step the highlighted row in place
+ *   - Down (bottom row of tabs) : same as Z, enters the content list
+ *   - X (cancel) : content list -> back to tab bar; tab bar -> close menu
  *   - Shift      : open the direct-input overlay (number/item qty/variable)
- *   - PageUp/PageDown : (Party/Skills tab) switch target party member
+ *
+ * The Party tab has no party-member switching (no PageUp/PageDown, no touch
+ * UI for it) -- instead every current party member's block is listed one
+ * after another in a single scrollable list, each starting with a
+ * non-selectable "[ Character: Name ]" header row followed by that member's
+ * own one-shot "Full Heal HP/MP/TP" action row (Z or Left/Right executes it
+ * immediately), Level/EXP, God Mode toggle, and per-character param bonuses.
+ * The Skills tab still always targets the party leader ($gameParty.leader())
+ * since a skill grid only makes sense for one character at a time.
  *
  * Layout:
- *   - Window_CheatTab        : horizontal tab bar (General/Party/Items/Armors/Skills/Variables)
- *   - Window_CheatCommand    : left-side feature list
- *   - Window_CheatValueEdit  : right-side value adjust / toggle pane
+ *   - Window_CheatTab        : top tab bar, up to 5 columns, wraps to a 2nd
+ *                               row when there are more tabs than that
+ *   - Window_CheatContent    : single full-width content window; every value
+ *                               is viewed, adjusted, and toggled in place
+ *                               (no separate detail pane)
  *   - Window_CheatNumberInput: Shift-triggered direct-input overlay
  *
  * Each tab can be hidden from the tab bar via its "Enable ... Tab" parameter
@@ -105,7 +118,7 @@
  * -----------------------------------------------------------------------------
  */
 /*:ko
- * @plugindesc [치트 엔진] UI v1.2.0 - CheatEngine_Core.js의 API를 사용하는 인게임 치트 UI
+ * @plugindesc [치트 엔진] UI v2.2.0 - CheatEngine_Core.js의 API를 사용하는 인게임 치트 UI
  * @author rpghack
  * @base CheatEngine_Core
  * @orderAfter CheatEngine_Core
@@ -146,7 +159,7 @@
  * @text "Party" 탭 사용
  * @type boolean
  * @default true
- * @desc 상단 탭 목록에 Party 탭(레벨/EXP/파라미터/God Mode, 전투 중 적 즉사)을 표시합니다.
+ * @desc 상단 탭 목록에 Party 탭(파티원 전원의 레벨/EXP/파라미터/전회복/God Mode, 전투 중 적 즉사)을 표시합니다.
  *
  * @param enableItemsTab
  * @text "Items" 탭 사용
@@ -192,17 +205,30 @@
  *   - 게임패드 Start 버튼 (기본 index 9, 파라미터로 변경/비활성화 가능)
  *
  * 창이 열린 뒤 기본 조작:
- *   - 방향키 : 탭 전환 / 목록 이동 / 값 조절
- *   - Z(확인) : 토글, 전환, 큰 폭 조절, 즉사 실행 등
- *   - X(취소) : 한 단계 뒤로
+ *   - 방향키 : 탭 바 커서 이동(2행까지 자동 랩핑되는 2차원 이동) / 콘텐츠
+ *              목록 커서 이동 / 선택된 항목의 값 조절
+ *   - Z(확인) : 탭 확정 -> 콘텐츠 목록으로 진입, 또는 (콘텐츠 목록 안에서는)
+ *              선택한 행을 그 자리에서 토글/전환/큰 폭 조절
+ *   - ▼(탭 바 마지막 줄에서) : Z와 동일하게 콘텐츠 목록으로 진입
+ *   - X(취소) : 콘텐츠 목록 -> 탭 바로 복귀 / 탭 바에서는 메뉴 닫기
  *   - Shift : (숫자/아이템 수량/변수 항목에서) 직접 입력 창 열기
- *   - PageUp / PageDown : (Party/Skills 탭에서) 대상 파티원 전환
+ *
+ * Party 탭은 조작 대상을 "전환"하는 개념 자체가 없습니다 - PageUp/PageDown도,
+ * 터치 조작도 없습니다. 대신 현재 파티에 있는 모든 멤버의 항목 블록을 한
+ * 스크롤 목록에 순서대로 이어 붙여 보여줍니다. 각 블록은 선택할 수 없는
+ * "[ 캐릭터: 이름 ]" 구분선 행으로 시작하고, 그 아래로 그 캐릭터의
+ * "HP/MP/TP 즉시 전회복"(Z 또는 좌/우 방향키로 즉시 실행, 아래의 God Mode
+ * 스위치와는 별개의 기능), 레벨, 경험치, God Mode, 능력치 증감이 이어집니다.
+ * Skills 탭은 스킬 그리드가 캐릭터 1인 기준으로만 의미가 있으므로 여전히
+ * 파티 리더(주인공, $gameParty.leader())만 조작 대상으로 고정됩니다.
  *
  * 레이아웃:
- *   - Window_CheatTab        : 상단 가로 탭 (General/Party/Items/Armors/Skills/Variables)
- *   - Window_CheatCommand    : 좌측 기능 목록
- *   - Window_CheatValueEdit  : 우측 수치 조절 / 토글 창
- *   - Window_CheatNumberInput: Shift로 여는 직접 입력 오버레이 창
+ *   - Window_CheatTab        : 상단 탭 바, 최대 5열이며 탭이 더 많으면 2번째
+ *                               줄로 자동 랩핑됩니다.
+ *   - Window_CheatContent    : 화면 전체 폭을 쓰는 단일 콘텐츠 창. 별도의
+ *                               상세 창 없이 모든 값의 조회/조절/토글이 이
+ *                               창 안에서 바로(인라인으로) 이루어집니다.
+ *   - Window_CheatNumberInput: Shift로 여는 직접 입력(자리수 편집) 오버레이 창
  *
  * 위의 "... 탭 사용" 파라미터로 각 탭을 상단 탭 목록에서 숨길 수 있습니다
  * (탭을 숨겨도 해당 CheatManager 기능 자체는 스크립트 호출로 계속 사용할 수
@@ -216,7 +242,6 @@
     if (
         typeof Window_Selectable === "undefined" ||
         typeof Window_Command === "undefined" ||
-        typeof Window_HorzCommand === "undefined" ||
         typeof Scene_Base === "undefined"
     ) {
         console.error("CheatEngine_UI.js: RPG Maker 코어 스크립트가 로드되지 않았습니다.");
@@ -283,7 +308,8 @@
     }
 
     const PARAM_NAMES = ["최대HP", "최대MP", "공격력", "방어력", "마법력", "마법방어", "민첩성", "운"];
-    const SKILLS_TAB_COLUMNS = 4;
+    const SKILLS_TAB_COLUMNS = 3;
+    const TAB_MAX_COLS = 5;
 
     //-------------------------------------------------------------------
     // 파티원별 파라미터 증감 값을 기억해 두는 장부.
@@ -334,7 +360,7 @@
 
     //-------------------------------------------------------------------
     // 데이터 서술자(descriptor) 빌더
-    // type: "number" | "boolean" | "choice" | "item" | "variable" | "enemy" | "info"
+    // type: "number" | "boolean" | "choice" | "item" | "variable" | "enemy" | "action" | "info"
     //-------------------------------------------------------------------
     function buildGeneralDescriptors() {
         return [
@@ -367,10 +393,28 @@
         ];
     }
 
+    // 파티원 한 명 분량의 기술자 블록을 만든다. 맨 앞의 "info" 행은 클릭 불가한
+    // 구분선 헤더로, 여러 캐릭터의 블록을 한 목록에 이어 붙였을 때 어디부터
+    // 어디까지가 누구의 항목인지 한눈에 구분되게 해 준다.
     function buildActorDescriptors(actor) {
         if (!actor) return [];
         const list = [];
-        list.push({ name: `대상: ${actor.name()}  Lv.${actor.level}`, type: "info", get: () => "" });
+        list.push({
+            name: `▼ [ 캐릭터: ${actor.name()} ]  Lv.${actor.level}  ${"─".repeat(16)}`,
+            type: "info",
+            get: () => ""
+        });
+        list.push({
+            name: "HP/MP/TP 즉시 전회복",
+            type: "action",
+            get: () => "",
+            action: () => {
+                actor.setHp(actor.mhp);
+                actor.setMp(actor.mmp);
+                actor.setTp(actor.maxTp ? actor.maxTp() : 100);
+                if (typeof actor.refresh === "function") actor.refresh();
+            }
+        });
         list.push({
             name: "레벨",
             type: "number", step: 1, min: 1, max: actor.maxLevel(),
@@ -446,20 +490,40 @@
         return list;
     }
 
-    function buildPartyDescriptors(scene) {
-        return [
-            ...buildActorDescriptors(scene.actor()),
-            ...buildEnemyDescriptors(),
-            ...buildPartyGlobalDescriptors()
-        ];
+    // Skills 탭은 파티원 전환(PageUp/PageDown) 기능 자체가 없이 항상 파티
+    // 리더(주인공, $gameParty.leader())만 조작 대상으로 고정한다. (스킬
+    // 그리드는 캐릭터 1인 기준으로만 의미가 있어 여러 명을 동시에 펼치지 않는다.)
+    function leaderActor() {
+        return typeof $gameParty !== "undefined" && $gameParty && typeof $gameParty.leader === "function"
+            ? $gameParty.leader()
+            : null;
     }
 
-    // includeInfiniteToggle: 소모품(Items)만 "무한(소비 안 함)"이 의미가 있고,
-    // 장비(Armors/Weapons)는 통상 소모되지 않으므로 그 탭에서는 아예 노출하지
-    // 않는다. 무한 토글은 (전역 1개가 아니라) 아이템별로 개별 작동한다 -
-    // $dataItems 안에는 실제로는 소모되지 않는 특수 항목이 섞여 있을 수 있어
-    // 전역 스위치 하나로 묶으면 그런 항목에도 의도치 않게 영향을 주기 때문.
-    function buildItemLikeDescriptors(dataArray, includeInfiniteToggle) {
+    // Party 탭은 "액티브 캐릭터 전환" 개념을 아예 없애고, 현재 파티에 있는
+    // 모든 멤버(리더 포함)의 블록을 순서대로 이어 붙인 단일 스크롤 목록으로
+    // 만든다. 예전에는 PageUp/PageDown으로 조작 대상을 바꾸는 방식이라 화면에
+    // 보이는 캐릭터와 실제로 값이 반영되는 캐릭터가 어긋나는 사고가 났었는데,
+    // 애초에 "전환"이라는 상태 자체가 없으면 그 버그 자체가 성립하지 않는다.
+    function buildPartyDescriptors() {
+        const members = typeof $gameParty !== "undefined" && $gameParty && typeof $gameParty.members === "function"
+            ? $gameParty.members()
+            : [];
+        const list = [];
+        for (const member of members) {
+            list.push(...buildActorDescriptors(member));
+        }
+        list.push(...buildEnemyDescriptors());
+        list.push(...buildPartyGlobalDescriptors());
+        return list;
+    }
+
+    // 아이템/방어구 공용 서술자 빌더. 한 줄에 [아이콘+이름] - [수량] - [무한 고정]
+    // 세 컬럼을 모두 담기 위해, "무한 고정"은 CheatManager의 수량 잠금 기능
+    // (lockItemQuantity/unlockItemQuantity)을 그대로 재사용한다: 이 잠금은
+    // gainItem 훅에서 소비/획득과 무관하게 매번 잠긴 수량으로 되돌리므로, 그
+    // 자체로 "무한(소비돼도 줄지 않음) + 고정 수량" 두 가지 의미를 모두
+    // 만족한다. 켤 때는 지금 보유 수량을 그대로 잠금값으로 사용한다.
+    function buildItemLikeDescriptors(dataArray) {
         const list = [];
         if (!dataArray) return list;
         for (let i = 1; i < dataArray.length; i++) {
@@ -475,23 +539,15 @@
                     const container = RpgBridge.itemContainer(entry);
                     if (container) container[entry.id] = Math.max(0, Math.min(999, Math.round(v)));
                 },
-                isFixed99: () => CheatManager.isItemQuantityLocked(entry),
-                toggleFixed99() {
-                    if (this.isFixed99()) {
+                isLocked: () => CheatManager.isItemQuantityLocked(entry),
+                toggleLock() {
+                    if (this.isLocked()) {
                         CheatManager.unlockItemQuantity(entry);
                     } else {
-                        CheatManager.lockItemQuantity(entry, 99);
+                        CheatManager.lockItemQuantity(entry, this.get());
                     }
                 }
             });
-            if (includeInfiniteToggle) {
-                list.push({
-                    name: `　└ 무한 (소비 안 함)`,
-                    type: "boolean",
-                    get: () => CheatManager.isItemInfinite(entry),
-                    set: (v) => CheatManager.setItemInfinite(entry, v)
-                });
-            }
         }
         // 가상화 페이징: Window_Selectable#drawAllItems는 topIndex()부터
         // maxPageItems()개만 그리므로, 이 목록이 아무리 길어도(수백 개) 실제로는
@@ -500,17 +556,17 @@
     }
 
     function buildItemsDescriptors() {
-        return buildItemLikeDescriptors(typeof $dataItems !== "undefined" ? $dataItems : null, true);
+        return buildItemLikeDescriptors(typeof $dataItems !== "undefined" ? $dataItems : null);
     }
     function buildArmorsDescriptors() {
-        return buildItemLikeDescriptors(typeof $dataArmors !== "undefined" ? $dataArmors : null, false);
+        return buildItemLikeDescriptors(typeof $dataArmors !== "undefined" ? $dataArmors : null);
     }
 
-    function buildSkillsDescriptors(scene) {
-        const actor = scene.actor();
+    function buildSkillsDescriptors() {
+        const actor = leaderActor();
         if (!actor || typeof $dataSkills === "undefined" || !$dataSkills) return [];
         const list = [{ name: `대상: ${actor.name()}`, type: "info", get: () => "" }];
-        // 4열 그리드에서는 인덱스 순서대로 칸이 채워지므로, 안내 행이 스킬 1~3과
+        // N열 그리드에서는 인덱스 순서대로 칸이 채워지므로, 안내 행이 다음 스킬과
         // 같은 줄에 끼어 보이지 않도록 다음 행 경계까지 빈 칸으로 채워 둔다.
         while (list.length % SKILLS_TAB_COLUMNS !== 0) {
             list.push({ name: "", type: "info", get: () => "" });
@@ -545,23 +601,26 @@
 
     // 탭 활성화 파라미터로 필터링한다. 전부 꺼져 있으면(설정 실수 등) 빈 메뉴가
     // 되어버리는 것을 막기 위해 안전하게 전체 탭을 되살린다.
-    // listWidthRatio: 좌측 목록 창이 전체 폭에서 차지하는 비율(우측 상세 창은
-    // 나머지). columns: 목록을 몇 열 그리드로 배치할지(Skills는 4열 그리드).
+    // columns: 콘텐츠 목록을 몇 열 그리드로 배치할지(Skills는 다열 그리드,
+    // 그 외에는 전부 1열 - 화면 전체 폭을 한 줄에 그대로 쓴다).
     const ALL_TABS = [
-        { name: "General", enabled: paramBool(PARAMS, "enableGeneralTab", true), builder: buildGeneralDescriptors, listWidthRatio: 0.4, columns: 1 },
-        { name: "Party", enabled: paramBool(PARAMS, "enablePartyTab", true), builder: buildPartyDescriptors, listWidthRatio: 0.4, columns: 1 },
-        { name: "Items", enabled: paramBool(PARAMS, "enableItemsTab", true), builder: buildItemsDescriptors, listWidthRatio: 0.6, columns: 1 },
-        { name: "Armors", enabled: paramBool(PARAMS, "enableArmorsTab", true), builder: buildArmorsDescriptors, listWidthRatio: 0.6, columns: 1 },
-        { name: "Skills", enabled: paramBool(PARAMS, "enableSkillsTab", true), builder: buildSkillsDescriptors, listWidthRatio: 0.78, columns: SKILLS_TAB_COLUMNS },
-        { name: "Variables", enabled: paramBool(PARAMS, "enableVariablesTab", true), builder: buildVariablesDescriptors, listWidthRatio: 0.4, columns: 1 }
+        { name: "General", enabled: paramBool(PARAMS, "enableGeneralTab", true), builder: buildGeneralDescriptors, columns: 1 },
+        { name: "Party", enabled: paramBool(PARAMS, "enablePartyTab", true), builder: buildPartyDescriptors, columns: 1 },
+        { name: "Items", enabled: paramBool(PARAMS, "enableItemsTab", true), builder: buildItemsDescriptors, columns: 1 },
+        { name: "Armors", enabled: paramBool(PARAMS, "enableArmorsTab", true), builder: buildArmorsDescriptors, columns: 1 },
+        { name: "Skills", enabled: paramBool(PARAMS, "enableSkillsTab", true), builder: buildSkillsDescriptors, columns: SKILLS_TAB_COLUMNS },
+        { name: "Variables", enabled: paramBool(PARAMS, "enableVariablesTab", true), builder: buildVariablesDescriptors, columns: 1 }
     ];
     const FILTERED_TABS = ALL_TABS.filter((tab) => tab.enabled);
     const ACTIVE_TABS = FILTERED_TABS.length > 0 ? FILTERED_TABS : ALL_TABS;
 
     //-------------------------------------------------------------------
-    // Window_CheatTab : 상단 가로 탭
+    // Window_CheatTab : 상단 탭 바. 최대 TAB_MAX_COLS열이며, 그보다 탭이
+    // 많으면 자동으로 다음 줄로 넘어간다(예: 6번째 탭 Variables는 2번째
+    // 줄로). Window_Command 그대로에 maxCols()만 재정의하면 Window_Selectable
+    // 기본 cursorUp/Down/Left/Right가 알아서 2차원 그리드 이동을 처리해 준다.
     //-------------------------------------------------------------------
-    class Window_CheatTab extends Window_HorzCommand {
+    class Window_CheatTab extends Window_Command {
         // 주의: RpgBridge.initWindow()는 "완성된 인스턴스"에 대해 외부에서 호출하는
         // 용도이며, 여기서처럼 자기 자신의 initialize 오버라이드 내부에서
         // this.initialize(...)를 다시 호출하면 무한 재귀에 빠진다. 따라서 여기서는
@@ -577,10 +636,10 @@
             return Graphics.boxWidth;
         }
         windowHeight() {
-            return panelHeight(1);
+            return panelHeight(2);
         }
         maxCols() {
-            return ACTIVE_TABS.length;
+            return Math.min(TAB_MAX_COLS, ACTIVE_TABS.length);
         }
         makeCommandList() {
             for (const tab of ACTIVE_TABS) {
@@ -594,20 +653,39 @@
         callUpdateHelp() {
             if (this._changeHandler) this._changeHandler();
         }
+        // 탭 바가 이미 마지막 줄일 때 아래 방향키를 누르면 Z(확인)와 동일하게
+        // "현재 탭 확정 -> 콘텐츠 목록으로 포커스 이동"을 트리거한다. 아직 위에
+        // 다른 줄이 남아 있을 때는 평범하게 그 줄로 커서만 이동한다. 기본
+        // cursorDown()가 이동 가능 여부를 판단하는 조건(index + maxCols <
+        // maxItems)을 그대로 재사용해 "내려갈 줄이 없다"를 판별한다.
+        cursorDown(wrap) {
+            const index = this.index();
+            const cols = this.maxCols();
+            const hasRowBelow = index + cols < this.maxItems();
+            if (hasRowBelow) {
+                super.cursorDown(wrap);
+            } else {
+                this.processOk();
+            }
+        }
     }
 
     //-------------------------------------------------------------------
-    // Window_CheatCommand : 좌측 기능 목록
+    // Window_CheatContent : 화면 전체 폭을 쓰는 단일 콘텐츠 창.
+    // 좌/우 방향키는(그리드가 아닌 1열 탭에서는) 목록 이동이 아니라 그 자리에서
+    // 값을 조절하는 데 쓰이고, Z(Ok)는 토글/전환/큰 폭 조절을 인라인으로 즉시
+    // 적용한 뒤 계속 이 창에 포커스를 남겨 둔다(다른 창으로 넘어가지 않음).
     //-------------------------------------------------------------------
-    class Window_CheatCommand extends Window_Command {
-        // _descriptors / _cheatWidth / _cheatHeight는 super.initialize(...) 도중
-        // (MV 경로에서는 windowWidth()/windowHeight()가, 양쪽 경로 모두
+    class Window_CheatContent extends Window_Command {
+        // _descriptors / _columns / _cheatWidth / _cheatHeight는 super.initialize(...)
+        // 도중(MV 경로에서는 windowWidth()/windowHeight()가, 양쪽 경로 모두
         // makeCommandList()가 즉시 호출되므로) 반드시 super 호출 이전에 세팅한다.
         initialize(x, y, width, height) {
             this._descriptors = [];
             this._columns = 1;
             this._cheatWidth = width;
             this._cheatHeight = height;
+            this._directInputHandler = null;
             if (RpgBridge.isMZ) {
                 super.initialize(new Rectangle(x, y, width, height));
             } else {
@@ -615,10 +693,10 @@
             }
         }
         windowWidth() {
-            return this._cheatWidth || Math.floor(Graphics.boxWidth * 0.4);
+            return this._cheatWidth || Graphics.boxWidth;
         }
         windowHeight() {
-            return this._cheatHeight || Graphics.boxHeight - panelHeight(1);
+            return this._cheatHeight || Graphics.boxHeight - panelHeight(2);
         }
         maxCols() {
             return this._columns || 1;
@@ -629,10 +707,6 @@
                 this.addCommand(desc.name, "select", enabled, desc);
             }
         }
-        // columns: 1이면 기존처럼 세로 한 줄 목록, 그 이상이면(Skills 탭의 4열
-        // 그리드 등) 가로 N열 그리드로 배치한다. maxCols()가 이 값을 그대로
-        // 반환하므로 Window_Selectable의 기본 itemWidth()/itemRect() 계산이
-        // 자동으로 N등분된 열 폭을 만들어 준다.
         setDescriptors(list, columns) {
             this._descriptors = list || [];
             this._columns = columns || 1;
@@ -656,6 +730,141 @@
         callUpdateHelp() {
             if (this._changeHandler) this._changeHandler();
         }
+        setDirectInputHandler(handler) {
+            this._directInputHandler = handler;
+        }
+        update() {
+            super.update();
+            if (this.active && Input.isTriggered("shift")) {
+                const desc = this.currentExt();
+                if (desc && this._supportsDirectInput(desc) && this._directInputHandler) {
+                    this._directInputHandler(desc);
+                }
+            }
+        }
+        _supportsDirectInput(desc) {
+            if (desc.type === "number" || desc.type === "item") return true;
+            if (desc.type === "variable") return variableKind(desc.varId) === "number";
+            return false;
+        }
+        // 그리드 탭(Skills)에서는 좌/우가 열 이동에 쓰이므로 기본 동작을 그대로
+        // 두고, 1열 탭(General/Party/Items/Armors/Variables)에서는 좌/우를
+        // "그 자리에서 값 조절"로 재정의한다.
+        cursorRight() {
+            if (this._columns > 1) {
+                super.cursorRight();
+            } else {
+                this._adjust(1);
+            }
+        }
+        cursorLeft() {
+            if (this._columns > 1) {
+                super.cursorLeft();
+            } else {
+                this._adjust(-1);
+            }
+        }
+        // 기본 Window_Command#processOk는 호출 후 창을 비활성화하고 핸들러로
+        // 넘어가므로, 인라인 토글을 위해 완전히 재정의해서 포커스를 이 창에
+        // 그대로 유지한다.
+        processOk() {
+            const desc = this.currentExt();
+            if (!desc || desc.type === "info") {
+                this.playBuzzerSound();
+                return;
+            }
+            SoundManager.playOk();
+            this._applyOkAction(desc);
+            this.refresh();
+        }
+        _adjust(direction) {
+            const desc = this.currentExt();
+            if (!desc) return;
+            switch (desc.type) {
+                case "boolean":
+                    desc.set(!desc.get());
+                    break;
+                case "number":
+                case "item":
+                    this._stepValue(desc, direction);
+                    break;
+                case "choice":
+                    this._cycleChoice(desc, direction);
+                    break;
+                case "variable":
+                    this._adjustVariable(desc, direction);
+                    break;
+                case "enemy":
+                case "action":
+                    desc.action();
+                    break;
+                default:
+                    return; // "info" 등: 조절 불가, 사운드 없음
+            }
+            SoundManager.playCursor();
+            this.refresh();
+        }
+        _applyOkAction(desc) {
+            switch (desc.type) {
+                case "boolean":
+                    desc.set(!desc.get());
+                    break;
+                case "item":
+                    desc.toggleLock();
+                    break;
+                case "choice":
+                    this._cycleChoice(desc, 1);
+                    break;
+                case "variable":
+                    this._applyVariableOk(desc);
+                    break;
+                case "enemy":
+                case "action":
+                    desc.action();
+                    break;
+                case "number":
+                    this._stepValue(desc, 10); // Z: 큰 폭(스텝*10) 조절
+                    break;
+                default:
+                    break; // "info": 아무 동작 없음
+            }
+        }
+        _stepValue(desc, direction) {
+            const step = (desc.step || 1) * direction;
+            let v = (desc.get() || 0) + step;
+            if (desc.min !== undefined) v = Math.max(desc.min, v);
+            if (desc.max !== undefined) v = Math.min(desc.max, v);
+            v = Math.round(v * 100) / 100;
+            desc.set(v);
+        }
+        _cycleChoice(desc, direction) {
+            const values = desc.values || [];
+            if (values.length === 0) return;
+            let idx = values.indexOf(desc.get());
+            if (idx < 0) idx = 0;
+            idx = (idx + direction + values.length) % values.length;
+            desc.set(values[idx]);
+        }
+        _adjustVariable(desc, direction) {
+            const kind = variableKind(desc.varId);
+            if (kind === "number") {
+                CheatManager.setNumberVariable(desc.varId, CheatManager.getNumberVariable(desc.varId) + direction);
+            } else if (kind === "boolean") {
+                CheatManager.setBooleanVariable(desc.varId, !CheatManager.getBooleanVariable(desc.varId));
+            } else {
+                this.playBuzzerSound(); // [Read-Only]: 값 변경 불가
+            }
+        }
+        _applyVariableOk(desc) {
+            const kind = variableKind(desc.varId);
+            if (kind === "boolean") {
+                CheatManager.setBooleanVariable(desc.varId, !CheatManager.getBooleanVariable(desc.varId));
+            } else if (kind === "number") {
+                CheatManager.setNumberVariable(desc.varId, CheatManager.getNumberVariable(desc.varId) + 10);
+            } else {
+                this.playBuzzerSound();
+            }
+        }
         // Window_Command#drawItem 기본 구현에 의존하지 않고 직접 그린다: MV는
         // itemTextAlign()이 "left", MZ는 "center"라서 그리드 칸에서 이름과
         // 값/상태 표시가 서로 다르게 겹칠 수 있기 때문에, 두 엔진 모두 동일하게
@@ -670,238 +879,72 @@
             if (desc.type === "info") {
                 this.drawText(desc.name, rect.x, rect.y, rect.width, "left");
             } else if (desc.type === "item") {
-                // "값 컬럼"과 "고정 컬럼"을 하나로 합친 문자열이 아니라 서로 다른
-                // 고정폭 열로 분리해서, 고정 여부 표시가 항상 값 컬럼 오른쪽의
-                // 정해진 자리에 오도록 한다.
-                const fixedColWidth = 76;
-                const valueColWidth = 64;
-                const nameWidth = Math.max(0, rect.width - valueColWidth - fixedColWidth);
-                this.drawText(desc.name, rect.x, rect.y, nameWidth, "left");
-                this.drawText(`${desc.get()}`, rect.x + nameWidth, rect.y, valueColWidth, "right");
-                if (desc.isFixed99()) {
-                    this.changeTextColor(RpgBridge.textColor(this, 17)); // "강화(powerUp)" 색상 재사용
-                    this.drawText("FIXED", rect.x + nameWidth + valueColWidth, rect.y, fixedColWidth, "right");
-                    this.resetTextColor();
-                }
+                this._drawItemRow(desc, rect);
             } else if (this._columns > 1) {
-                // 그리드(예: Skills 4xN): 좁은 칸 안에 이름 + 짧은 ON/OFF 표시.
-                const indicatorWidth = 56;
-                const nameWidth = Math.max(0, rect.width - indicatorWidth);
-                this.drawText(desc.name, rect.x, rect.y, nameWidth, "left");
-                this.drawText(this._formatValue(desc), rect.x + nameWidth, rect.y, indicatorWidth, "right");
+                this._drawGridRow(desc, rect);
             } else {
-                this.drawText(desc.name, rect.x, rect.y, rect.width, "left");
-                this.drawText(this._formatValue(desc), rect.x, rect.y, rect.width, "right");
+                this._drawLineRow(desc, rect);
             }
 
             this.changePaintOpacity(true);
         }
+        // 단 한 줄에 [아이콘+이름] - [수량: N] - [무한 고정: ON/OFF] 세 컬럼을
+        // 모두 담는다. 이름 폭은 나머지 두 고정폭 컬럼을 뺀 나머지 전부.
+        _drawItemRow(desc, rect) {
+            const qtyColWidth = 130;
+            const fixedColWidth = 170;
+            const iconWidth = desc.item && desc.item.iconIndex ? 36 : 0;
+
+            let x = rect.x;
+            if (iconWidth > 0) {
+                this.drawIcon(desc.item.iconIndex, x, rect.y + 2);
+                x += iconWidth;
+            }
+            const nameWidth = Math.max(0, rect.width - iconWidth - qtyColWidth - fixedColWidth);
+            this.drawText(desc.name, x, rect.y, nameWidth, "left");
+
+            const qtyX = rect.x + rect.width - fixedColWidth - qtyColWidth;
+            this.drawText(`수량: ${desc.get()}`, qtyX, rect.y, qtyColWidth, "right");
+
+            const fixedX = rect.x + rect.width - fixedColWidth;
+            const locked = desc.isLocked();
+            if (locked) this.changeTextColor(RpgBridge.textColor(this, 17)); // "강화(powerUp)" 색상 재사용
+            this.drawText(`무한 고정: ${locked ? "ON" : "OFF"}`, fixedX, rect.y, fixedColWidth, "right");
+            this.resetTextColor();
+        }
+        // 그리드(Skills): 좁은 칸 안에 이름 + 짧은 ON/OFF 표시. 글자 겹침을
+        // 막기 위해 이름은 살짝 작은 폰트로 그린다.
+        _drawGridRow(desc, rect) {
+            const indicatorWidth = 60;
+            const nameWidth = Math.max(0, rect.width - indicatorWidth - 8);
+            const originalFontSize = this.contents.fontSize;
+            this.contents.fontSize = Math.min(originalFontSize, 22);
+            this.drawText(desc.name, rect.x, rect.y, nameWidth, "left");
+            this.contents.fontSize = originalFontSize;
+
+            const on = !!desc.get();
+            if (on) this.changeTextColor(RpgBridge.textColor(this, 17));
+            this.drawText(on ? "ON" : "OFF", rect.x + rect.width - indicatorWidth, rect.y, indicatorWidth, "right");
+            this.resetTextColor();
+        }
+        // 1열 탭(General/Party/Variables): 이름은 왼쪽, 값/상태는 오른쪽.
+        _drawLineRow(desc, rect) {
+            this.drawText(desc.name, rect.x, rect.y, rect.width, "left");
+            if (desc.type === "boolean" && desc.get()) {
+                this.changeTextColor(RpgBridge.textColor(this, 17));
+            }
+            this.drawText(this._formatValue(desc), rect.x, rect.y, rect.width, "right");
+            this.resetTextColor();
+        }
         _formatValue(desc) {
             const value = desc.get();
             if (desc.type === "boolean") return value ? "ON" : "OFF";
-            if (desc.type === "item") return `${value}${desc.isFixed99() ? " [FIXED]" : ""}`;
+            if (desc.type === "action") return "Z / ◀▶ 실행";
             if (desc.type === "choice") return desc.format ? desc.format(value) : `${value}`;
             if (desc.type === "variable") return formatVariableValue(desc.varId);
             if (desc.type === "enemy") return value;
             if (desc.format) return desc.format(value);
             return `${value}`;
-        }
-    }
-
-    //-------------------------------------------------------------------
-    // Window_CheatValueEdit : 우측 수치 조절 / 토글 창
-    //-------------------------------------------------------------------
-    class Window_CheatValueEdit extends Window_Selectable {
-        // Window_Selectable은 Window_Command와 달리 MV에서도 (x,y,width,height)를
-        // 그대로 받으므로 windowWidth()/windowHeight() 오버라이드 없이 인자만
-        // 그대로 분기 전달하면 된다.
-        initialize(x, y, width, height) {
-            this._descriptor = null;
-            this._directInputHandler = null;
-            if (RpgBridge.isMZ) {
-                super.initialize(new Rectangle(x, y, width, height));
-            } else {
-                super.initialize(x, y, width, height);
-            }
-            this.refresh();
-        }
-        maxItems() {
-            return 1;
-        }
-        // Window_Selectable#isOkEnabled 기본 구현은 isHandled('ok')를 반환하므로
-        // (Window_Command와 달리) 'ok' 핸들러를 등록하지 않으면 processOk()가
-        // 아예 호출되지 않는다. 이 창은 핸들러 시스템 대신 직접 로직을 처리하므로
-        // 항상 true를 반환하도록 재정의한다.
-        isOkEnabled() {
-            return true;
-        }
-        setDescriptor(desc) {
-            this._descriptor = desc || null;
-            this.select(this._descriptor ? 0 : -1);
-            this.refresh();
-        }
-        setDirectInputHandler(handler) {
-            this._directInputHandler = handler;
-        }
-        update() {
-            super.update();
-            if (this.active && this._descriptor && Input.isTriggered("shift") && this._supportsDirectInput()) {
-                if (this._directInputHandler) this._directInputHandler(this._descriptor);
-            }
-        }
-        _supportsDirectInput() {
-            const d = this._descriptor;
-            if (d.type === "number" || d.type === "item") return true;
-            if (d.type === "variable") return variableKind(d.varId) === "number";
-            return false;
-        }
-        // 좌/우 방향키는 목록 이동이 아니라 값 조절로 재정의한다.
-        cursorRight() {
-            this._adjust(1);
-        }
-        cursorLeft() {
-            this._adjust(-1);
-        }
-        // 기본 Window_Selectable#processOk는 호출 후 창을 비활성화하므로,
-        // 값 조절 중에는 포커스를 유지하기 위해 완전히 재정의한다.
-        processOk() {
-            if (!this._descriptor) {
-                this.playBuzzerSound();
-                return;
-            }
-            SoundManager.playOk();
-            this._applyOkAction();
-            this.refresh();
-        }
-        _adjust(direction) {
-            const d = this._descriptor;
-            if (!d) return;
-            switch (d.type) {
-                case "boolean":
-                    d.set(!d.get());
-                    break;
-                case "number":
-                case "item":
-                    this._stepValue(d, direction);
-                    break;
-                case "choice":
-                    this._cycleChoice(d, direction);
-                    break;
-                case "variable":
-                    this._adjustVariable(d, direction);
-                    break;
-                case "enemy":
-                    d.action();
-                    break;
-                default:
-                    return; // "info" 등: 조절 불가, 사운드 없음
-            }
-            SoundManager.playCursor();
-            this.refresh();
-        }
-        _applyOkAction() {
-            const d = this._descriptor;
-            switch (d.type) {
-                case "boolean":
-                    d.set(!d.get());
-                    break;
-                case "item":
-                    d.toggleFixed99();
-                    break;
-                case "choice":
-                    this._cycleChoice(d, 1);
-                    break;
-                case "variable":
-                    this._applyVariableOk(d);
-                    break;
-                case "enemy":
-                    d.action();
-                    break;
-                case "number":
-                    this._stepValue(d, 10); // Z: 큰 폭(스텝*10) 조절
-                    break;
-                default:
-                    break; // "info": 아무 동작 없음
-            }
-        }
-        _stepValue(d, direction) {
-            const step = (d.step || 1) * direction;
-            let v = (d.get() || 0) + step;
-            if (d.min !== undefined) v = Math.max(d.min, v);
-            if (d.max !== undefined) v = Math.min(d.max, v);
-            v = Math.round(v * 100) / 100;
-            d.set(v);
-        }
-        _cycleChoice(d, direction) {
-            const values = d.values || [];
-            if (values.length === 0) return;
-            let idx = values.indexOf(d.get());
-            if (idx < 0) idx = 0;
-            idx = (idx + direction + values.length) % values.length;
-            d.set(values[idx]);
-        }
-        _adjustVariable(d, direction) {
-            const kind = variableKind(d.varId);
-            if (kind === "number") {
-                CheatManager.setNumberVariable(d.varId, CheatManager.getNumberVariable(d.varId) + direction);
-            } else if (kind === "boolean") {
-                CheatManager.setBooleanVariable(d.varId, !CheatManager.getBooleanVariable(d.varId));
-            } else {
-                this.playBuzzerSound(); // [Read-Only]: 값 변경 불가
-            }
-        }
-        _applyVariableOk(d) {
-            const kind = variableKind(d.varId);
-            if (kind === "boolean") {
-                CheatManager.setBooleanVariable(d.varId, !CheatManager.getBooleanVariable(d.varId));
-            } else if (kind === "number") {
-                CheatManager.setNumberVariable(d.varId, CheatManager.getNumberVariable(d.varId) + 10);
-            } else {
-                this.playBuzzerSound();
-            }
-        }
-        refresh() {
-            this.contents.clear();
-            const w = this.contentsWidth();
-            if (!this._descriptor) {
-                this.drawText("← 좌측에서 조절할 항목을 선택하세요", 0, LINE_HEIGHT, w, "center");
-                return;
-            }
-            const d = this._descriptor;
-            this.drawText(d.name, 0, 0, w, "left");
-            if (d.type === "info") return;
-
-            this.resetTextColor();
-            this.contents.fontSize = 26;
-            this.drawText(this._valueText(d), 0, LINE_HEIGHT * 1.5, w, "center");
-            this.resetFontSettings();
-
-            this.resetTextColor();
-            this.drawText(this._hintText(d), 0, LINE_HEIGHT * 3.2, w, "center");
-        }
-        _valueText(d) {
-            if (d.type === "boolean") return d.get() ? "ON" : "OFF";
-            if (d.type === "item") return `${d.get()}${d.isFixed99() ? "  [FIXED 99]" : ""}`;
-            if (d.type === "choice") return d.format ? d.format(d.get()) : `${d.get()}`;
-            if (d.type === "variable") return formatVariableValue(d.varId);
-            if (d.type === "enemy") return d.get();
-            if (d.format) return d.format(d.get());
-            return `${d.get()}`;
-        }
-        _hintText(d) {
-            if (d.type === "enemy") return "◄► / Z : Instant Kill 실행     X : 뒤로";
-            if (d.type === "variable" && variableKind(d.varId) === "readonly") {
-                return "[Read-Only] 이 타입은 수정할 수 없습니다     X : 뒤로";
-            }
-            const parts = ["◄► : 값 조절"];
-            if (d.type === "boolean" || d.type === "choice") {
-                parts.push("Z : 토글/전환");
-            } else {
-                parts.push("Z : 큰 폭 조절");
-            }
-            if (this._supportsDirectInput()) parts.push("Shift : 직접 입력");
-            parts.push("X : 뒤로");
-            return parts.join("   ");
         }
     }
 
@@ -989,52 +1032,34 @@
         create() {
             super.create();
             this.createTabWindow();
-            this.createCommandWindow();
-            this.createValueEditWindow();
+            this.createContentWindow();
             this.createNumberInputWindow();
 
             this._tabWindow.setHandler("select", this.onTabOk.bind(this));
             this._tabWindow.setHandler("cancel", this.onTabCancel.bind(this));
             this._tabWindow.setChangeHandler(this.onTabChange.bind(this));
 
-            this._commandWindow.setHandler("select", this.onCommandOk.bind(this));
-            this._commandWindow.setHandler("cancel", this.onCommandCancel.bind(this));
-            this._commandWindow.setHandler("pagedown", this.nextActor.bind(this));
-            this._commandWindow.setHandler("pageup", this.previousActor.bind(this));
-            this._commandWindow.setChangeHandler(this.onCommandChange.bind(this));
-
-            this._valueEditWindow.setHandler("cancel", this.onValueEditCancel.bind(this));
-            this._valueEditWindow.setDirectInputHandler(this.onRequestDirectInput.bind(this));
+            this._contentWindow.setHandler("cancel", this.onContentCancel.bind(this));
+            this._contentWindow.setDirectInputHandler(this.onRequestDirectInput.bind(this));
 
             this._numberInputWindow.setHandler("ok", this.onNumberInputOk.bind(this));
             this._numberInputWindow.setHandler("cancel", this.onNumberInputCancel.bind(this));
 
-            // 시작 탭(보통 첫 번째 활성 탭)에 맞는 폭 배분을 최초 1회 적용한다.
-            // 이후에는 onTabOk()에서 탭을 확정할 때만 다시 계산한다.
-            this._layoutWindowsForTab(ACTIVE_TABS[this._tabWindow.index()]);
             this.onTabChange();
-            this._commandWindow.deactivate();
-            this._valueEditWindow.deactivate();
+            this._contentWindow.deactivate();
             this._tabWindow.activate();
+            this._refreshFocusVisuals();
         }
         createTabWindow() {
-            this._tabWindow = new Window_CheatTab(0, 0, Graphics.boxWidth, panelHeight(1));
+            this._tabWindow = new Window_CheatTab(0, 0, Graphics.boxWidth, panelHeight(2));
             this.addWindow(this._tabWindow);
         }
-        createCommandWindow() {
+        createContentWindow() {
             const y = this._tabWindow.height;
-            const width = Math.floor(Graphics.boxWidth * 0.4);
+            const width = Graphics.boxWidth;
             const height = Graphics.boxHeight - y;
-            this._commandWindow = new Window_CheatCommand(0, y, width, height);
-            this.addWindow(this._commandWindow);
-        }
-        createValueEditWindow() {
-            const y = this._tabWindow.height;
-            const x = this._commandWindow.width;
-            const width = Graphics.boxWidth - x;
-            const height = Graphics.boxHeight - y;
-            this._valueEditWindow = new Window_CheatValueEdit(x, y, width, height);
-            this.addWindow(this._valueEditWindow);
+            this._contentWindow = new Window_CheatContent(0, y, width, height);
+            this.addWindow(this._contentWindow);
         }
         createNumberInputWindow() {
             const width = 8 * 32 + WINDOW_PADDING * 2;
@@ -1044,103 +1069,25 @@
             this._numberInputWindow = new Window_CheatNumberInput(x, y, width, height);
             this.addWindow(this._numberInputWindow);
         }
-        _isActorTab() {
-            const tab = ACTIVE_TABS[this._tabWindow.index()];
-            return !!tab && (tab.name === "Party" || tab.name === "Skills");
-        }
-        // Party/Skills 탭에서만 PageUp/PageDown으로 대상 파티원을 순환한다.
-        // Scene_MenuBase#nextActor/previousActor(->$gameParty.makeMenuActorNext
-        // 등)와 onActorChange() 훅을 그대로 재사용한다.
-        nextActor() {
-            if (!this._isActorTab()) {
-                this._commandWindow.activate();
-                return;
-            }
-            super.nextActor();
-        }
-        previousActor() {
-            if (!this._isActorTab()) {
-                this._commandWindow.activate();
-                return;
-            }
-            super.previousActor();
-        }
-        onActorChange() {
-            this.onTabChange();
-            this._commandWindow.activate();
-        }
-        // 탭마다 목록/상세 창의 폭 배분을 다시 계산한다. Items/Armors는 값+FIXED
-        // 두 열을 나란히 보여주려고, Skills는 4열 그리드를 위해 목록 창에 더
-        // 넓은 영역을 준다(그만큼 상세 창은 좁아진다).
-        _layoutWindowsForTab(tab) {
-            const ratio = tab ? tab.listWidthRatio : 0.4;
-            const y = this._tabWindow.height;
-            const height = Graphics.boxHeight - y;
-            const listWidth = Math.floor(Graphics.boxWidth * ratio);
-            const controlWidth = Graphics.boxWidth - listWidth;
-
-            this._commandWindow.move(0, y, listWidth, height);
-            this._valueEditWindow.move(listWidth, y, controlWidth, height);
-            // Window_CheatCommand는 곧이어 호출되는 setDescriptors()->refresh()가
-            // Window_Command#refresh() 안에서 createContents()를 다시 호출해
-            // 주므로 여기서 따로 처리할 필요가 없다. Window_CheatValueEdit는
-            // refresh()를 직접 구현해서 createContents()를 부르지 않으므로,
-            // 새 크기의 컨텐츠 비트맵을 여기서 직접 다시 만들어야 한다.
-            this._valueEditWindow.createContents();
-        }
-        // 탭 바를 좌우로 훑어보는 동안(아직 확정 전) 목록 "내용"만 미리 보여주고
-        // 창 크기는 건드리지 않는다. 예전에는 여기서 매번 _layoutWindowsForTab()을
-        // 호출했는데, 탭 바 위에서 방향키를 누를 때마다(탭을 실제로 선택하기도
-        // 전에) 목록/상세 창 경계가 탭마다 다른 폭 비율로 계속 다시 계산되어
-        // 화면이 흔들리는 것처럼 보였다. 크기 변경은 onTabOk()에서 탭을 확정할
-        // 때 한 번만 적용한다.
         onTabChange() {
             const tab = ACTIVE_TABS[this._tabWindow.index()];
-            this._commandWindow.setDescriptors(tab ? tab.builder(this) : [], tab ? tab.columns : 1);
-        }
-        onCommandChange() {
-            const desc = this._commandWindow.currentExt();
-            this._valueEditWindow.setDescriptor(desc);
+            this._contentWindow.setDescriptors(tab ? tab.builder(this) : [], tab ? tab.columns : 1);
         }
         onTabOk() {
-            const tab = ACTIVE_TABS[this._tabWindow.index()];
-            this._layoutWindowsForTab(tab);
             this._tabWindow.deactivate();
-            this._commandWindow.activate();
+            this._contentWindow.activate();
+            this._refreshFocusVisuals();
         }
         onTabCancel() {
             this.popScene();
         }
-        onCommandOk() {
-            const desc = this._commandWindow.currentExt();
-            if (!desc || desc.type === "info") {
-                this._commandWindow.activate();
-                return;
-            }
-            // 토글(boolean)은 우측 상세 창으로 넘어갈 필요 없이 목록에서 Z로
-            // 바로 켜고 끈다. processOk()가 이미 이 창을 deactivate() 했으므로
-            // 다시 activate()해서 포커스를 목록에 그대로 둔다.
-            if (desc.type === "boolean") {
-                desc.set(!desc.get());
-                this._commandWindow.refresh();
-                this._valueEditWindow.refresh();
-                this._commandWindow.activate();
-                return;
-            }
-            this._commandWindow.deactivate();
-            this._valueEditWindow.activate();
-        }
-        onCommandCancel() {
-            this._commandWindow.deactivate();
+        onContentCancel() {
+            this._contentWindow.deactivate();
             this._tabWindow.activate();
-        }
-        onValueEditCancel() {
-            this._valueEditWindow.deactivate();
-            this._commandWindow.activate();
-            this._commandWindow.refresh();
+            this._refreshFocusVisuals();
         }
         onRequestDirectInput(descriptor) {
-            this._valueEditWindow.deactivate();
+            this._contentWindow.deactivate();
             this._numberInputWindow.setup(descriptor);
             this._numberInputWindow.show();
             this._numberInputWindow.activate();
@@ -1161,9 +1108,15 @@
         _closeNumberInput() {
             this._numberInputWindow.hide();
             this._numberInputWindow.deactivate();
-            this._commandWindow.refresh();
-            this._valueEditWindow.refresh();
-            this._valueEditWindow.activate();
+            this._contentWindow.refresh();
+            this._contentWindow.activate();
+        }
+        // 포커스가 없는 창은 콘텐츠 불투명도를 낮춰서, 지금 탭을 고르는 중인지
+        // 하단 콘텐츠 항목을 조작하는 중인지 한눈에 구분되게 한다.
+        _refreshFocusVisuals() {
+            const tabActive = this._tabWindow.active;
+            this._tabWindow.contentsOpacity = tabActive ? 255 : 160;
+            this._contentWindow.contentsOpacity = tabActive ? 160 : 255;
         }
     }
 
@@ -1212,7 +1165,6 @@
 
     window.Scene_Cheat = Scene_Cheat;
     window.Window_CheatTab = Window_CheatTab;
-    window.Window_CheatCommand = Window_CheatCommand;
-    window.Window_CheatValueEdit = Window_CheatValueEdit;
+    window.Window_CheatContent = Window_CheatContent;
     window.Window_CheatNumberInput = Window_CheatNumberInput;
 })();
