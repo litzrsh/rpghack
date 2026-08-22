@@ -2,7 +2,7 @@
 // CheatEngine_UI.js
 //=============================================================================
 /*:
- * @plugindesc [Cheat Engine] UI v2.2.0 - In-game cheat menu UI consuming CheatEngine_Core.js.
+ * @plugindesc [Cheat Engine] UI v2.3.0 - In-game cheat menu UI consuming CheatEngine_Core.js.
  * @author rpghack
  * @base CheatEngine_Core
  * @orderAfter CheatEngine_Core
@@ -115,10 +115,18 @@
  * Each tab can be hidden from the tab bar via its "Enable ... Tab" parameter
  * above (the underlying CheatManager feature stays fully usable via script
  * calls either way -- the parameter only controls menu visibility).
+ *
+ * Extending with game-specific tabs:
+ *   - A separate plugin file loaded AFTER this one (e.g. CheatEngine_RJ386773.js)
+ *     may call window.CheatEngineUI.registerTab({ name, enabled, builder, columns })
+ *     to add its own tab to the tab bar. `builder` has the same signature as
+ *     every built-in tab's builder (() => descriptor[]). This keeps hardcoded,
+ *     single-game logic (specific variable IDs, other plugins' commands, ...)
+ *     out of this generic file entirely.
  * -----------------------------------------------------------------------------
  */
 /*:ko
- * @plugindesc [치트 엔진] UI v2.2.0 - CheatEngine_Core.js의 API를 사용하는 인게임 치트 UI
+ * @plugindesc [치트 엔진] UI v2.3.0 - CheatEngine_Core.js의 API를 사용하는 인게임 치트 UI
  * @author rpghack
  * @base CheatEngine_Core
  * @orderAfter CheatEngine_Core
@@ -233,6 +241,14 @@
  * 위의 "... 탭 사용" 파라미터로 각 탭을 상단 탭 목록에서 숨길 수 있습니다
  * (탭을 숨겨도 해당 CheatManager 기능 자체는 스크립트 호출로 계속 사용할 수
  * 있으며, 파라미터는 메뉴에 보이는지 여부만 제어합니다).
+ *
+ * 게임별 전용 탭 확장하기:
+ *   - 이 플러그인보다 나중에 로드되는 별도 파일(예: CheatEngine_RJ386773.js)에서
+ *     window.CheatEngineUI.registerTab({ name, enabled, builder, columns })를
+ *     호출하면 자신만의 탭을 탭 바에 추가할 수 있습니다. builder는 다른 기본
+ *     탭들과 동일한 시그니처(() => descriptor[])를 가집니다. 이를 통해 특정
+ *     변수 ID나 다른 플러그인의 커맨드 같은 특정 게임 전용 로직을 이 범용
+ *     파일 밖으로 완전히 분리할 수 있습니다.
  * -----------------------------------------------------------------------------
  */
 
@@ -537,7 +553,12 @@
                 get: () => (typeof $gameParty !== "undefined" && $gameParty ? $gameParty.numItems(entry) : 0),
                 set: (v) => {
                     const container = RpgBridge.itemContainer(entry);
-                    if (container) container[entry.id] = Math.max(0, Math.min(999, Math.round(v)));
+                    if (container) {
+                        container[entry.id] = Math.max(0, Math.min(999, Math.round(v)));
+                        if (container[entry.id] === 0) {
+                            delete container[entry.id];
+                        }
+                    }
                 },
                 isLocked: () => CheatManager.isItemQuantityLocked(entry),
                 toggleLock() {
@@ -611,8 +632,24 @@
         { name: "Skills", enabled: paramBool(PARAMS, "enableSkillsTab", true), builder: buildSkillsDescriptors, columns: SKILLS_TAB_COLUMNS },
         { name: "Variables", enabled: paramBool(PARAMS, "enableVariablesTab", true), builder: buildVariablesDescriptors, columns: 1 }
     ];
-    const FILTERED_TABS = ALL_TABS.filter((tab) => tab.enabled);
-    const ACTIVE_TABS = FILTERED_TABS.length > 0 ? FILTERED_TABS : ALL_TABS;
+    // 게임별 추가 치트 플러그인(예: CheatEngine_RJ386773.js)이 이 파일 로드 이후에
+    // registerTab()으로 자기 탭을 얹을 수 있도록, ALL_TABS는 이후에도 계속
+    // push되는 살아있는 배열로 두고 실제 사용 시점(getActiveTabs 호출 시)마다
+    // 다시 필터링한다. 상수로 한 번만 필터링해 버리면 이 파일보다 나중에 로드된
+    // 플러그인이 추가한 탭이 하단 탭 바에 반영되지 않는다.
+    function getActiveTabs() {
+        const filtered = ALL_TABS.filter((tab) => tab.enabled);
+        return filtered.length > 0 ? filtered : ALL_TABS;
+    }
+    // 게임별 확장 플러그인이 사용할 공개 등록 API. tab: { name, enabled, builder, columns }
+    // (builder는 ALL_TABS의 다른 항목들과 동일한 시그니처: () => descriptor[])
+    window.CheatEngineUI = {
+        registerTab(tab) {
+            if (tab && typeof tab.builder === "function") {
+                ALL_TABS.push(Object.assign({ enabled: true, columns: 1 }, tab));
+            }
+        }
+    };
 
     //-------------------------------------------------------------------
     // Window_CheatTab : 상단 탭 바. 최대 TAB_MAX_COLS열이며, 그보다 탭이
@@ -639,10 +676,10 @@
             return panelHeight(2);
         }
         maxCols() {
-            return Math.min(TAB_MAX_COLS, ACTIVE_TABS.length);
+            return Math.min(TAB_MAX_COLS, getActiveTabs().length);
         }
         makeCommandList() {
-            for (const tab of ACTIVE_TABS) {
+            for (const tab of getActiveTabs()) {
                 this.addCommand(tab.name, "select", true);
             }
         }
@@ -1070,7 +1107,7 @@
             this.addWindow(this._numberInputWindow);
         }
         onTabChange() {
-            const tab = ACTIVE_TABS[this._tabWindow.index()];
+            const tab = getActiveTabs()[this._tabWindow.index()];
             this._contentWindow.setDescriptors(tab ? tab.builder(this) : [], tab ? tab.columns : 1);
         }
         onTabOk() {
@@ -1124,6 +1161,7 @@
     // 토글 입력: 키보드(TOGGLE_KEY_CODE) / 게임패드(GAMEPAD_START_BUTTON, 파라미터로 설정)
     //-------------------------------------------------------------------
     let gamepadStartWasPressed = false;
+    let messageSkipWasPressed = false;
 
     function isCheatSceneActive() {
         return typeof SceneManager !== "undefined" && SceneManager._scene instanceof Scene_Cheat;
@@ -1142,6 +1180,9 @@
         if (event.keyCode === TOGGLE_KEY_CODE) {
             event.preventDefault();
             toggleCheatScene();
+        } else if (event.key === "F7") {
+            event.preventDefault();
+            CheatManager.setMessageSkip(!CheatManager.isMessageSkip());
         }
     });
 
@@ -1154,12 +1195,18 @@
             _inputUpdate.call(this);
             const pads = typeof navigator !== "undefined" && navigator.getGamepads ? navigator.getGamepads() : null;
             const pad = pads && pads[0];
-            const button = pad && pad.buttons && pad.buttons[GAMEPAD_START_BUTTON];
-            const pressed = !!(button && button.pressed);
-            if (pressed && !gamepadStartWasPressed) {
+            const button1 = pad && pad.buttons && pad.buttons[GAMEPAD_START_BUTTON];
+            const button2 = pad && pad.buttons && pad.buttons[8];
+            const pressed1 = !!(button1 && button1.pressed);
+            const pressed2 = !!(button2 && button2.pressed);
+            if (pressed1 && !gamepadStartWasPressed) {
                 toggleCheatScene();
             }
-            gamepadStartWasPressed = pressed;
+            gamepadStartWasPressed = pressed1;
+            if (pressed2 && !messageSkipWasPressed) {
+                CheatManager.setMessageSkip(!CheatManager.isMessageSkip());
+            }
+            messageSkipWasPressed = pressed2;
         };
     }
 

@@ -468,7 +468,7 @@ var CheatManager = CheatManager || null;
             this._hookInstantKill();
             this._hookStatMultiplier();
             this._hookMoveSpeed();
-            this._hookGainItem();
+            this._hookLoseItem();
             this._hookSaveLoad();
         }
 
@@ -612,18 +612,18 @@ var CheatManager = CheatManager || null;
         }
 
         // gainItem 인터셉트: 무한 아이템 / 보유량 고정
-        _hookGainItem() {
+        _hookLoseItem() {
             if (typeof Game_Party === "undefined") return;
             const manager = this;
-            const _gainItem = Game_Party.prototype.gainItem;
-            Game_Party.prototype.gainItem = function (item, amount, includeEquip) {
+            const _loseItem = Game_Party.prototype.loseItem;
+            Game_Party.prototype.loseItem = function (item, amount, includeEquip) {
                 if (!item) return;
 
                 if (amount < 0 && manager.isItemInfinite(item)) {
                     return; // 이 아이템의 소비(감소)만 무시하여 사실상 무한 아이템으로 동작
                 }
 
-                _gainItem.call(this, item, amount, includeEquip);
+                _loseItem.call(this, item, amount, includeEquip);
 
                 const lock = manager._state.lockedItems.get(manager._itemKey(item));
                 if (lock) {
