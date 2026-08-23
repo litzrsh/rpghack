@@ -1066,7 +1066,14 @@
             ctx.strokeStyle = NUMBER_INPUT_BORDER_COLOR;
             ctx.stroke();
             ctx.restore();
-            this.contents._setDirty();
+            // Bitmap has no public "I just drew on your canvas directly"
+            // method of its own; poking its PIXI baseTexture is the
+            // standard way plugins flag a manually-drawn canvas region for
+            // a GPU texture refresh (Bitmap's own fillRect/drawText/etc.
+            // do the same internally after they touch the context).
+            if (this.contents.baseTexture && typeof this.contents.baseTexture.update === "function") {
+                this.contents.baseTexture.update();
+            }
         }
         // Large, clean, high-contrast digits -- the currently active digit
         // rendered bigger and pure white, the rest dimmed, so the dial's
