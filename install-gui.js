@@ -32,20 +32,54 @@ const CUSTOM_CHEATS_DIR = path.join(ROOT_DIR, "custom_cheats");
 const INDEX_HTML_PATH = path.join(ROOT_DIR, "index.html");
 
 const CORE_PLUGIN_FILES = ["CheatEngine_Core.js", "CheatEngine_UI.js"];
+const CHEAT_ENGINE_PREFIX = "CheatEngine_";
 const DEFAULT_PORT = 3000;
 const MAX_PORT_ATTEMPTS = 10;
 
-// Custom cheat files live in custom_cheats/ and are named directly after the
-// game's RJ product ID (e.g. "RJ258412.js" or "RJ258412.json"), NOT prefixed
-// with "CheatEngine_" the way the bundled plugins/ files are -- this list is
-// meant for cheats a user drops in for their own game, independent of what
-// ships in plugins/.
-const RJ_FILENAME_PATTERN = /^RJ[0-9A-Za-z]*\.(js|json)$/i;
-const RJ_ID_PATTERN = /^RJ\d+$/i;
-// Matches a plugins.js registry entry's "name" field (filename, no
-// extension) for a custom RJ cheat -- looser than RJ_ID_PATTERN since a
-// scanned custom_cheats/ file may carry letters after "RJ", not just digits.
-const RJ_NAME_PATTERN = /^RJ[0-9A-Za-z]*$/i;
+// Custom cheat files live in custom_cheats/ and are named directly after any
+// game ID the user picks (e.g. "Steam_123450.js", "BJ9999.json", "RJ258412.js"),
+// NOT prefixed with "CheatEngine_" the way the bundled plugins/ files are --
+// this list is meant for cheats a user drops in for their own game,
+// independent of what ships in plugins/. Only on injection is the file
+// renamed to "CheatEngine_{ID}.js" for the target game (see handleInject).
+//
+// The base filename (the "ID") is restricted to a safe, cross-platform
+// charset -- letters, digits, underscore, hyphen -- since it also becomes
+// part of a filesystem path and a plugins.js registry name; this rejects
+// path-separator and traversal characters on both Windows and POSIX systems
+// without needing any OS-specific handling.
+const GENERIC_FILENAME_PATTERN = /^[A-Za-z0-9_-]+\.(js|json)$/;
+const ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+// "Core" and "UI" are reserved for the bundled CheatEngine_Core.js /
+// CheatEngine_UI.js files themselves -- a custom cheat using either name
+// (in any casing) would collide with them once renamed to
+// "CheatEngine_Core.js" / "CheatEngine_UI.js" on injection.
+const RESERVED_IDS = new Set(["CORE", "UI"]);
+const RESERVED_ID_MESSAGE = "Error: 'Core' and 'UI' are reserved system IDs and cannot be used.";
+
+// Matches any plugin file/registry name this installer owns, for a complete
+// uninstall: the two core files plus every custom "CheatEngine_{ID}" cheat
+// created by a previous injection.
+const CHEAT_ENGINE_FILE_PATTERN = /^CheatEngine_.+\.js$/i;
+const CHEAT_ENGINE_NAME_PATTERN = /^CheatEngine_.+$/i;
+
+function isReservedId(id) {
+    return RESERVED_IDS.has(String(id).toUpperCase());
+}
+
+// Validates a candidate cheat ID (from a scanned filename or manual entry):
+// safe charset, and not one of the reserved system IDs. Returns an error
+// message string, or null if the ID is valid.
+function validateCheatId(id) {
+    if (!ID_PATTERN.test(id)) {
+        return `Invalid ID "${id}": only letters, numbers, underscores, and hyphens are allowed.`;
+    }
+    if (isReservedId(id)) {
+        return RESERVED_ID_MESSAGE;
+    }
+    return null;
+}
 
 //-----------------------------------------------------------------------
 // Small helpers
@@ -175,15 +209,16 @@ function upsertPluginEntry(list, name, description) {
 }
 
 //-----------------------------------------------------------------------
-// Skeleton generator for a manually-typed RJ ID that has no scanned file yet
+// Skeleton generator for a manually-typed game ID that has no scanned file yet
 //-----------------------------------------------------------------------
 
-function buildSkeletonCheatSource(rjId) {
+function buildSkeletonCheatSource(id) {
+    const registeredName = `${CHEAT_ENGINE_PREFIX}${id}`;
     return `//=============================================================================
-// ${rjId}.js
+// ${registeredName}.js
 //=============================================================================
 /*:
- * @plugindesc [Cheat Engine] ${rjId} v1.0.0 - Game-specific cheat tab skeleton for ${rjId} (extends CheatEngine_UI.js).
+ * @plugindesc [Cheat Engine] ${id} v1.0.0 - Game-specific cheat tab skeleton for ${id} (extends CheatEngine_UI.js).
  * @author rpghack
  * @base CheatEngine_Core
  * @base CheatEngine_UI
@@ -192,12 +227,13 @@ function buildSkeletonCheatSource(rjId) {
  * @url
  *
  * @help
- * ${rjId}.js
+ * ${registeredName}.js
  * -----------------------------------------------------------------------------
  * Auto-generated skeleton, created by the GUI installer because no scanned
- * custom_cheats/ file matched this RJ ID. Fill in buildDescriptors() below
- * with this game's own hardcoded variable IDs / plugin commands, the same
- * way plugins/CheatEngine_RJ386773.js does it for its own game.
+ * custom_cheats/ file matched this ID. Fill in buildDescriptors() below with
+ * this game's own hardcoded variable IDs / plugin commands, the same way
+ * plugins/CheatEngine_RJ386773.js does it for its own game (source stored
+ * as custom_cheats/RJ386773.js, installed as CheatEngine_RJ386773.js).
  * -----------------------------------------------------------------------------
  */
 
@@ -205,27 +241,27 @@ function buildSkeletonCheatSource(rjId) {
     "use strict";
 
     if (typeof RpgBridge === "undefined" || typeof CheatManager === "undefined" || !CheatManager) {
-        console.error("${rjId}.js: CheatEngine_Core.js must be loaded first.");
+        console.error("${registeredName}.js: CheatEngine_Core.js must be loaded first.");
         return;
     }
     if (typeof window.CheatEngineUI === "undefined" || typeof window.CheatEngineUI.registerTab !== "function") {
-        console.error("${rjId}.js: CheatEngine_UI.js must be loaded first.");
+        console.error("${registeredName}.js: CheatEngine_UI.js must be loaded first.");
         return;
     }
 
-    // TODO: replace this placeholder with real descriptors for ${rjId}
+    // TODO: replace this placeholder with real descriptors for ${id}
     // (variable IDs, plugin commands, etc.). Use the same descriptor shape
     // as the rest of CheatEngine_UI.js: type is one of "number" | "boolean" |
     // "choice" | "action" | "info", each with a get() and (except "info")
     // a set() or action().
     function buildDescriptors() {
         return [
-            { name: "TODO: add ${rjId}-specific cheats here", type: "info", get: () => "" }
+            { name: "TODO: add ${id}-specific cheats here", type: "info", get: () => "" }
         ];
     }
 
     window.CheatEngineUI.registerTab({
-        name: "${rjId}",
+        name: "${id}",
         enabled: true,
         builder: buildDescriptors,
         columns: 1
@@ -265,15 +301,29 @@ function createLogger(res) {
 }
 
 //-----------------------------------------------------------------------
-// GET /api/scan -- list custom_cheats/*.js|*.json files starting with "RJ"
+// GET /api/scan -- list every custom_cheats/*.js|*.json file, minus any
+// whose ID collides with a reserved system name ("Core" / "UI").
 //-----------------------------------------------------------------------
 
 async function handleScan(req, res) {
     try {
         await ensureCustomCheatsDir();
         const entries = await fsp.readdir(CUSTOM_CHEATS_DIR);
-        const files = entries.filter((name) => RJ_FILENAME_PATTERN.test(name)).sort();
-        sendJson(res, 200, { files });
+        const files = [];
+        const rejected = [];
+        for (const name of entries.sort()) {
+            if (!GENERIC_FILENAME_PATTERN.test(name)) continue;
+            const id = path.basename(name, path.extname(name));
+            if (isReservedId(id)) {
+                rejected.push(name);
+                continue;
+            }
+            files.push(name);
+        }
+        if (rejected.length > 0) {
+            console.warn(`Skipped reserved-ID cheat file(s) during scan: ${rejected.join(", ")}`);
+        }
+        sendJson(res, 200, { files, rejected });
     } catch (err) {
         sendJson(res, 500, { error: `Failed to scan custom_cheats/: ${err.message}` });
     }
@@ -302,6 +352,45 @@ function handleDetect(req, res, query) {
 //-----------------------------------------------------------------------
 
 async function handleInject(req, res) {
+    let body;
+    try {
+        body = await readJsonBody(req);
+    } catch (err) {
+        return sendJson(res, 400, { error: err.message });
+    }
+
+    const gameDirInput = typeof body.gameDir === "string" ? body.gameDir.trim() : "";
+    const selectedCheat = typeof body.selectedCheat === "string" ? body.selectedCheat.trim() : "";
+    const manualId = typeof body.manualId === "string" ? body.manualId.trim() : "";
+    const backupEnabled = !!body.backupEnabled;
+
+    // Resolve which cheat ID (if any) is being requested and validate it --
+    // including the reserved-ID guardrail ("Core" / "UI") -- before any
+    // streaming response has begun, so an invalid ID is rejected with a real
+    // HTTP 400 instead of a mid-stream error line.
+    let cheatId = null;
+    let cheatFromScan = false;
+    if (selectedCheat) {
+        const isSafeName =
+            GENERIC_FILENAME_PATTERN.test(selectedCheat) &&
+            !selectedCheat.includes("/") &&
+            !selectedCheat.includes("\\") &&
+            !selectedCheat.includes("..");
+        if (!isSafeName) {
+            return sendJson(res, 400, { error: `Invalid cheat file selection: ${selectedCheat}` });
+        }
+        cheatId = path.basename(selectedCheat, path.extname(selectedCheat));
+        cheatFromScan = true;
+    } else if (manualId) {
+        cheatId = manualId;
+    }
+    if (cheatId !== null) {
+        const idError = validateCheatId(cheatId);
+        if (idError) {
+            return sendJson(res, 400, { error: idError });
+        }
+    }
+
     const logger = createLogger(res);
     res.writeHead(200, {
         "Content-Type": "text/plain; charset=utf-8",
@@ -310,12 +399,6 @@ async function handleInject(req, res) {
     });
 
     try {
-        const body = await readJsonBody(req);
-        const gameDirInput = typeof body.gameDir === "string" ? body.gameDir.trim() : "";
-        const selectedCheat = typeof body.selectedCheat === "string" ? body.selectedCheat.trim() : "";
-        const manualRjId = typeof body.manualRjId === "string" ? body.manualRjId.trim() : "";
-        const backupEnabled = !!body.backupEnabled;
-
         if (!gameDirInput) {
             return logger.fail("Please enter the target game folder path.");
         }
@@ -338,39 +421,28 @@ async function handleInject(req, res) {
             return logger.fail(`plugins.js not found: ${detected.pluginsJsPath}`);
         }
 
-        // Resolve which custom cheat file (if any) to install, validating
-        // any user-supplied filename/ID before it ever touches the
-        // filesystem.
+        // Resolve the cheat source file on disk (the ID itself was already
+        // validated above) and decide the renamed "CheatEngine_{ID}.js" name
+        // it will be installed under.
         let cheatFileName = null;
         let cheatSourcePath = null;
         let cheatIsGenerated = false;
 
-        if (selectedCheat) {
-            const isSafeName =
-                RJ_FILENAME_PATTERN.test(selectedCheat) &&
-                !selectedCheat.includes("/") &&
-                !selectedCheat.includes("\\") &&
-                !selectedCheat.includes("..");
-            if (!isSafeName) {
-                return logger.fail(`Invalid cheat file selection: ${selectedCheat}`);
-            }
+        if (cheatFromScan) {
             const candidate = path.join(CUSTOM_CHEATS_DIR, selectedCheat);
             if (path.dirname(candidate) !== CUSTOM_CHEATS_DIR || !fs.existsSync(candidate)) {
                 return logger.fail(`Selected cheat file was not found in custom_cheats/: ${selectedCheat}`);
             }
-            cheatFileName = selectedCheat;
             cheatSourcePath = candidate;
-            logger.log(`Using scanned cheat file: ${cheatFileName}`);
-        } else if (manualRjId) {
-            if (!RJ_ID_PATTERN.test(manualRjId)) {
-                return logger.fail(`Invalid RJ ID (expected e.g. "RJ098765"): ${manualRjId}`);
-            }
-            cheatFileName = `${manualRjId}.js`;
+            cheatFileName = `${CHEAT_ENGINE_PREFIX}${cheatId}.js`;
+            logger.log(`Using scanned cheat file: ${selectedCheat} -> ${cheatFileName}`);
+        } else if (cheatId) {
+            cheatFileName = `${CHEAT_ENGINE_PREFIX}${cheatId}.js`;
             await ensureCustomCheatsDir();
-            cheatSourcePath = path.join(CUSTOM_CHEATS_DIR, cheatFileName);
-            fs.writeFileSync(cheatSourcePath, buildSkeletonCheatSource(manualRjId), "utf8");
+            cheatSourcePath = path.join(CUSTOM_CHEATS_DIR, `${cheatId}.js`);
+            fs.writeFileSync(cheatSourcePath, buildSkeletonCheatSource(cheatId), "utf8");
             cheatIsGenerated = true;
-            logger.log(`No matching scanned file, so a new skeleton was generated: custom_cheats/${cheatFileName}`);
+            logger.log(`No matching scanned file, so a new skeleton was generated: custom_cheats/${cheatId}.js -> ${cheatFileName}`);
         } else {
             logger.log("No custom cheat file selected -- installing only the core engine (CheatEngine_Core / CheatEngine_UI).");
         }
@@ -488,9 +560,7 @@ async function handleUninstall(req, res) {
             const removedNames = [];
             const keptList = list.filter((p) => {
                 const name = (p && p.name) || "";
-                const isCoreEngine = name === "CheatEngine_Core" || name === "CheatEngine_UI";
-                const isRjCustom = RJ_NAME_PATTERN.test(name);
-                if (isCoreEngine || isRjCustom) {
+                if (CHEAT_ENGINE_NAME_PATTERN.test(name)) {
                     removedNames.push(name);
                     return false;
                 }
@@ -505,12 +575,12 @@ async function handleUninstall(req, res) {
         }
 
         // Step 2: delete the plugin files themselves from disk -- the two
-        // core files plus any scanned custom RJ*.js/json cheat files sitting
-        // in the game's plugins directory.
+        // core files plus any custom "CheatEngine_{ID}.js" cheat files a
+        // previous injection created in the game's plugins directory.
         const filesToDelete = new Set(CORE_PLUGIN_FILES);
         if (fs.existsSync(detected.pluginsDir)) {
             for (const name of fs.readdirSync(detected.pluginsDir)) {
-                if (RJ_FILENAME_PATTERN.test(name)) filesToDelete.add(name);
+                if (CHEAT_ENGINE_FILE_PATTERN.test(name)) filesToDelete.add(name);
             }
         }
         let deletedCount = 0;

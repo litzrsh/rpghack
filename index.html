@@ -171,6 +171,17 @@
         color: var(--text-dim);
     }
 
+    .warning-label {
+        margin-top: 6px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        color: var(--crimson);
+        text-shadow: 0 0 6px rgba(255, 0, 85, 0.5);
+        display: none;
+    }
+
+    .warning-label.visible { display: block; }
+
     /* ================= Zone 2: Hybrid control panel ================= */
     .control-grid {
         display: grid;
@@ -404,9 +415,10 @@
             </div>
             <div class="divider-or">— OR MANUAL ENTRY —</div>
             <div class="field">
-                <label for="manual-rj-id">Direct RJ ID</label>
-                <input type="text" id="manual-rj-id" placeholder="RJ098765" autocomplete="off" spellcheck="false" />
-                <p class="hint">Used only if no file above is selected. Generates a skeleton cheat tab.</p>
+                <label for="manual-id">Direct Game ID</label>
+                <input type="text" id="manual-id" placeholder="Steam_123450" autocomplete="off" spellcheck="false" />
+                <p class="hint">Used only if no file above is selected. Generates a skeleton cheat tab, installed as CheatEngine_{ID}.js.</p>
+                <p id="reserved-id-warning" class="warning-label">⚠️ "Core" and "UI" are reserved system keywords. Please use a unique Game ID.</p>
             </div>
         </section>
     </div>
@@ -438,13 +450,22 @@
     const gameDirInput = document.getElementById("game-dir");
     const backupToggle = document.getElementById("backup-toggle");
     const cheatSelect = document.getElementById("cheat-select");
-    const manualRjIdInput = document.getElementById("manual-rj-id");
+    const manualIdInput = document.getElementById("manual-id");
+    const reservedIdWarningEl = document.getElementById("reserved-id-warning");
     const injectButton = document.getElementById("inject-button");
     const uninstallButton = document.getElementById("uninstall-button");
     const terminalEl = document.getElementById("terminal");
     const terminalStatusEl = document.getElementById("terminal-status");
     const badgeEl = document.getElementById("engine-badge");
     const badgeTextEl = document.getElementById("engine-badge-text");
+
+    // "Core" and "UI" are reserved for the bundled CheatEngine_Core.js /
+    // CheatEngine_UI.js files themselves -- kept in sync with the same
+    // guardrail enforced server-side in install-gui.js.
+    const RESERVED_IDS = new Set(["CORE", "UI"]);
+    function isReservedId(id) {
+        return RESERVED_IDS.has(id.trim().toUpperCase());
+    }
 
     //-------------------------------------------------------------
     // Console terminal helper
@@ -495,7 +516,10 @@
     gameDirInput.addEventListener("input", scheduleDetect);
 
     //-------------------------------------------------------------
-    // Populate the cheat-file dropdown from /api/scan on load
+    // Populate the cheat-file dropdown from /api/scan on load. The option's
+    // value stays the raw custom_cheats/ filename (needed by the backend to
+    // locate the source file), while its visible label previews the renamed
+    // "CheatEngine_{ID}.js" name it will actually be installed as.
     //-------------------------------------------------------------
     async function loadScannedCheats() {
         try {
@@ -503,15 +527,23 @@
             const data = await res.json();
             const files = Array.isArray(data.files) ? data.files : [];
             for (const file of files) {
+                const id = file.replace(/\.(js|json)$/i, "");
                 const opt = document.createElement("option");
                 opt.value = file;
-                opt.textContent = file;
+                opt.textContent = "CheatEngine_" + id + ".js";
                 cheatSelect.appendChild(opt);
             }
             if (files.length === 0) {
-                appendLine("No custom cheats found in custom_cheats/ -- add RJ*.js files there, or use manual entry below.", "system");
+                appendLine("No custom cheats found in custom_cheats/ -- add a .js/.json file there, or use manual entry below.", "system");
             } else {
                 appendLine("Scanned " + files.length + " custom cheat file(s) from custom_cheats/.", "system");
+            }
+            const rejected = Array.isArray(data.rejected) ? data.rejected : [];
+            if (rejected.length > 0) {
+                appendLine(
+                    "Skipped reserved-ID file(s) (\"Core\"/\"UI\" are reserved): " + rejected.join(", "),
+                    "error"
+                );
             }
         } catch (err) {
             appendLine("Failed to scan custom_cheats/: " + err.message, "error");
@@ -519,15 +551,34 @@
     }
 
     //-------------------------------------------------------------
+    // Manual Game ID field: live guardrail against the reserved "Core" /
+    // "UI" system IDs -- disables Inject and shows a warning immediately,
+    // rather than waiting for the server to reject the request.
+    //-------------------------------------------------------------
+    let manualIdIsReserved = false;
+    function validateManualId() {
+        const id = manualIdInput.value.trim();
+        manualIdIsReserved = id !== "" && isReservedId(id);
+        reservedIdWarningEl.classList.toggle("visible", manualIdIsReserved);
+        refreshButtonStates();
+    }
+    manualIdInput.addEventListener("input", validateManualId);
+
+    //-------------------------------------------------------------
     // Shared streaming request helper -- used by both Inject and Uninstall.
     // POSTs to `url` and renders each newline-delimited LOG:/ERROR:/DONE:
     // chunk into the terminal as it arrives; `onDone(payload)` renders the
     // final success line for whichever action is running.
     //-------------------------------------------------------------
+    let isBusy = false;
+    function refreshButtonStates() {
+        injectButton.disabled = isBusy || manualIdIsReserved;
+        uninstallButton.disabled = isBusy;
+    }
     function setBusy(busy) {
-        injectButton.disabled = busy;
-        uninstallButton.disabled = busy;
+        isBusy = busy;
         terminalStatusEl.textContent = busy ? "running..." : "idle";
+        refreshButtonStates();
     }
 
     async function runStreamedRequest(url, payload, onDone) {
@@ -538,6 +589,21 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload)
             });
+
+            // A non-streaming, plain JSON error (e.g. HTTP 400 for a
+            // reserved/invalid ID) -- caught before the server ever starts
+            // writing LOG:/ERROR:/DONE: chunks.
+            if (!response.ok) {
+                let message = "Request failed (HTTP " + response.status + ").";
+                try {
+                    const data = await response.json();
+                    if (data && data.error) message = data.error;
+                } catch (err) {
+                    // Response body wasn't JSON -- fall back to the generic message.
+                }
+                appendLine(message, "error");
+                return;
+            }
 
             const processLine = (rawLine) => processStreamLine(rawLine, onDone);
 
@@ -607,12 +673,16 @@
         const payload = {
             gameDir: gameDirInput.value.trim(),
             selectedCheat: cheatSelect.value,
-            manualRjId: manualRjIdInput.value.trim(),
+            manualId: manualIdInput.value.trim(),
             backupEnabled: backupToggle.checked
         };
 
         if (!payload.gameDir) {
             appendLine("Please enter the target game folder path first.", "error");
+            return;
+        }
+        if (manualIdIsReserved) {
+            appendLine("Cannot inject: the entered Game ID is a reserved system keyword.", "error");
             return;
         }
 
