@@ -169,6 +169,7 @@
   // step), 주사위 눈 고정. rollDice 몽키패치는 한 번만 설치한다.
   //-------------------------------------------------------------------
   let diceForced = false;
+  let diceValue = 6;
   let diceHooked = false;
   function hookRollDiceOnce() {
     if (diceHooked || typeof Game_Screen === "undefined") return;
@@ -176,7 +177,7 @@
     const _rollDice = Game_Screen.prototype.rollDice;
     Game_Screen.prototype.rollDice = function (count = 0, max = 1) {
       const dice = _rollDice.call(this, count, max);
-      return diceForced ? 6 : dice;
+      return diceForced ? diceValue : dice;
     };
   }
 
@@ -205,13 +206,11 @@
     hookRollDiceOnce();
     diceForced = !!flag;
   }
-
-  //-------------------------------------------------------------------
-  // Food / Drink reset (변수 #128, #298)
-  //-------------------------------------------------------------------
-  function resetFoodAndDrink() {
-    setVar(128, 0);
-    setVar(298, 0);
+  function getDiceResult() {
+    return diceValue;
+  }
+  function setDiceResult(value) {
+    diceValue = Math.max(1, Math.min(99, value));
   }
 
   //-------------------------------------------------------------------
@@ -253,9 +252,9 @@
   function buildRJ386773Descriptors() {
     const list = [];
 
-    list.push({ name: `▼ 날짜 / 시간  ${"─".repeat(16)}`, type: "info", get: () => "" });
+    list.push({ name: `▼ Date / Time  ${"─".repeat(16)}`, type: "info", get: () => "" });
     list.push({
-      name: "날짜",
+      name: "Date",
       type: "number",
       step: 1,
       min: 1,
@@ -265,7 +264,7 @@
       set: (v) => setDate(v),
     });
     list.push({
-      name: "시간대",
+      name: "Time",
       type: "choice",
       values: [0, 1, 2, 3],
       format: (v) => TIME_ZONE_LABELS[v] || `${v}`,
@@ -273,9 +272,9 @@
       set: (v) => setTime(v),
     });
 
-    list.push({ name: `▼ 스고로쿠  ${"─".repeat(16)}`, type: "info", get: () => "" });
+    list.push({ name: `▼ Sugoroku  ${"─".repeat(16)}`, type: "info", get: () => "" });
     list.push({
-      name: "턴 수",
+      name: "Sugoroku turns",
       type: "number",
       step: 1,
       min: 0,
@@ -284,7 +283,7 @@
       set: (v) => setSugorokuTurn(v),
     });
     list.push({
-      name: "보드 위치(칸)",
+      name: "Set remain steps",
       type: "number",
       step: 1,
       min: 1,
@@ -293,27 +292,30 @@
       set: (v) => setSugorokuStep(v),
     });
     list.push({
-      name: "주사위 눈 고정 (항상 6)",
+      name: "Fix dice result",
       type: "boolean",
       get: () => isDiceForced(),
       set: (v) => setDiceForced(v),
     });
-
-    list.push({ name: `▼ 기타  ${"─".repeat(16)}`, type: "info", get: () => "" });
     list.push({
-      name: "식사/음료 리셋",
-      type: "action",
-      get: () => "",
-      action: () => resetFoodAndDrink(),
+      name: "Dice result",
+      type: "number",
+      step: 1,
+      min: 1,
+      max: 99,
+      get: () => getDiceResult(),
+      set: (v) => setDiceResult(v),
     });
+
+    list.push({ name: `▼ Extras  ${"─".repeat(16)}`, type: "info", get: () => "" });
     list.push({
-      name: "버진 상태로 되돌리기 (질)",
+      name: "Restore virgin",
       type: "action",
       get: () => "",
       action: () => makeVaginaVirgin(),
     });
     list.push({
-      name: "버진 상태로 되돌리기 (항문)",
+      name: "Restor ass virgin",
       type: "action",
       get: () => "",
       action: () => makeAnalVirgin(),
@@ -321,7 +323,7 @@
 
     const actors = partyActors();
     if (actors.length > 0) {
-      list.push({ name: `▼ 파티 EXP (커스텀)  ${"─".repeat(16)}`, type: "info", get: () => "" });
+      list.push({ name: `▼ Party EXP  ${"─".repeat(16)}`, type: "info", get: () => "" });
       for (const actor of actors) {
         list.push({
           name: actor.name ? actor.name() : `Actor #${actor.actorId ? actor.actorId() : "?"}`,
@@ -387,7 +389,7 @@
   }
 
   window.CheatEngineUI.registerTab({
-    name: "RJ386773",
+    name: "エニシアと契約紋",
     enabled: ENABLE_TAB,
     builder: buildRJ386773Descriptors,
     columns: 1,
