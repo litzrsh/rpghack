@@ -696,17 +696,22 @@ var CheatManager = CheatManager || null;
         }
 
         // Speeds up battle the same way _hookMapFastForward() speeds up the
-        // map: while Fast Message Skip is on, re-runs BattleManager's own
-        // per-frame "advance the battle by one tick" update several extra
+        // map: while Fast Message Skip is on, re-runs both BattleManager's
+        // own per-frame "advance the battle by one tick" update AND the
+        // battle log window's per-frame wait/queue processing several extra
         // times per real render frame -- action execution, enemy AI turns,
-        // damage resolution, battle log lines, etc. all play out faster.
+        // damage resolution, and battle log lines all play out faster.
+        // (Only accelerating BattleManager isn't enough on its own: it
+        // blocks on the log window still being "busy", and the log window
+        // paces itself independently -- see the Window_BattleLog block
+        // below for why both are hooked.)
         //
-        // Hooking BattleManager.update directly (instead of Scene_Battle's
-        // update, the way _hookMapFastForward hooks Scene_Map) means none of
-        // Scene_Battle's own window/input handling is ever re-run, so this
-        // carries none of the double-input-processing risk that ruled out
-        // just looping the whole scene update -- BattleManager.update() only
-        // advances battle state, it never polls Input itself.
+        // Hooking BattleManager.update / Window_BattleLog.update directly
+        // (instead of Scene_Battle's update, the way _hookMapFastForward
+        // hooks Scene_Map) means none of Scene_Battle's own window/input
+        // handling is ever re-run, so this carries none of the
+        // double-input-processing risk that ruled out just looping the
+        // whole scene update -- neither of these updates polls Input.
         //
         // Deliberately bails (falls back to plain 1x) whenever
         // BattleManager.isInputting() is true (the player is choosing an
@@ -737,6 +742,46 @@ var CheatManager = CheatManager || null;
                     _update.call(this, timeActive);
                 }
             };
+
+            // BattleManager alone speeding up barely shows, because
+            // BattleManager.updateAction() blocks on the battle LOG window
+            // still being "busy" -- and Window_BattleLog paces itself
+            // through its own per-frame wait counter and queued "print this
+            // line / wait this many frames" methods, entirely independent of
+            // how many times BattleManager.update() ran in that same frame.
+            // The log window is the actual thing making battle feel slow
+            // (attack/skill-use/damage lines each pause between themselves),
+            // so it needs its own acceleration too.
+            if (typeof Window_BattleLog !== "undefined") {
+                // MZ's battle log already has a native "hold OK/Shift to
+                // speed up" mechanism: isFastForward() makes its wait
+                // counter tick down 3x as fast. Reusing it here taps into
+                // that built-in speed-up for free, the same way
+                // _hookMapFastForward() reuses Scene_Map's isFastForward().
+                if (typeof Window_BattleLog.prototype.isFastForward === "function") {
+                    const _logIsFastForward = Window_BattleLog.prototype.isFastForward;
+                    Window_BattleLog.prototype.isFastForward = function () {
+                        return canFastForward() || _logIsFastForward.call(this);
+                    };
+                }
+
+                // On top of that -- and the only mechanism at all on MV,
+                // which has no isFastForward concept for the battle log --
+                // re-run the log window's own per-frame update several extra
+                // times. It never polls Input itself (it's not an
+                // interactive/selectable window), so this carries none of
+                // the double-input-processing risk that rules out
+                // re-running an interactive window's update.
+                const _logUpdate = Window_BattleLog.prototype.update;
+                Window_BattleLog.prototype.update = function () {
+                    _logUpdate.call(this);
+                    if (!canFastForward()) return;
+
+                    for (let i = 1; i < BATTLE_FAST_FORWARD_MULTIPLIER; i++) {
+                        _logUpdate.call(this);
+                    }
+                };
+            }
         }
 
         // After refresh(), locks HP/MP to max only for "the party member whose
