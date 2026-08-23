@@ -2,7 +2,7 @@
 // CheatEngine_Core.js
 //=============================================================================
 /*:
- * @plugindesc [Cheat Engine] Core v1.4.0 - Pure-logic cheat engine core for RPG Maker MV/MZ (no UI).
+ * @plugindesc [Cheat Engine] Core v1.5.0 - Pure-logic cheat engine core for RPG Maker MV/MZ (no UI).
  * @author rpghack
  * @url
  *
@@ -52,6 +52,16 @@
  *     actor applies to an enemy kills it outright, regardless of damage
  *     formula, guard, or elemental rate.
  *
+ * Fast Message Skip also speeds up more than just text:
+ *   - Map: while an event is auto-running, characters walk faster, route
+ *     moves finish sooner, and screen tints/fades play back faster.
+ *   - Battle: while battle isn't waiting on the player (no actor/target/
+ *     skill/item selection, no open message), action execution, enemy AI
+ *     turns, damage resolution, and battle log lines all advance faster too.
+ *   Both bail back to normal 1x speed the instant the player needs to make
+ *   an actual choice, so this only ever accelerates auto-progressing
+ *   content, never a real decision point.
+ *
  * Plugin Command: none (pure script API).
  * -----------------------------------------------------------------------------
  */
@@ -95,6 +105,11 @@ var CheatManager = CheatManager || null;
     // own update methods, never the full Scene_Map#update(), so it can never
     // cause input from a message/choice window to be double-processed).
     const MAP_FAST_FORWARD_MULTIPLIER = 6;
+
+    // Same idea, but for battle: how many extra BattleManager "advance one
+    // tick" calls run per real render frame while Fast Message Skip is on
+    // and battle isn't waiting on the player (see _hookBattleFastForward()).
+    const BATTLE_FAST_FORWARD_MULTIPLIER = 6;
 
     // True while the player needs to make an active choice: a choice list,
     // a number-input window, or an item-choice window is open.
@@ -549,6 +564,7 @@ var CheatManager = CheatManager || null;
             this._hookMessageSkipWait();
             this._hookMessageSkipShowFast();
             this._hookMapFastForward();
+            this._hookBattleFastForward();
         }
 
         // Forces the message window's "confirm input detected" check to true,
@@ -675,6 +691,50 @@ var CheatManager = CheatManager || null;
                     $gamePlayer.update(active);
                     $gameTimer.update(active);
                     $gameScreen.update();
+                }
+            };
+        }
+
+        // Speeds up battle the same way _hookMapFastForward() speeds up the
+        // map: while Fast Message Skip is on, re-runs BattleManager's own
+        // per-frame "advance the battle by one tick" update several extra
+        // times per real render frame -- action execution, enemy AI turns,
+        // damage resolution, battle log lines, etc. all play out faster.
+        //
+        // Hooking BattleManager.update directly (instead of Scene_Battle's
+        // update, the way _hookMapFastForward hooks Scene_Map) means none of
+        // Scene_Battle's own window/input handling is ever re-run, so this
+        // carries none of the double-input-processing risk that ruled out
+        // just looping the whole scene update -- BattleManager.update() only
+        // advances battle state, it never polls Input itself.
+        //
+        // Deliberately bails (falls back to plain 1x) whenever
+        // BattleManager.isInputting() is true (the player is choosing an
+        // actor's command, a target, a skill, or an item) or
+        // isWaitingForPlayerInput() is true (a message/choice/number/item
+        // window is open), for the same reason every other fast-forward hook
+        // does: fast-forwarding must never touch an actual player decision
+        // point, only auto-progressing content.
+        _hookBattleFastForward() {
+            if (typeof BattleManager === "undefined" || !BattleManager) return;
+            const manager = this;
+
+            function canFastForward() {
+                return (
+                    manager.isMessageSkip() &&
+                    typeof $gameParty !== "undefined" && $gameParty && $gameParty.inBattle() &&
+                    typeof BattleManager.isInputting === "function" && !BattleManager.isInputting() &&
+                    !isWaitingForPlayerInput()
+                );
+            }
+
+            const _update = BattleManager.update;
+            BattleManager.update = function (timeActive) {
+                _update.call(this, timeActive);
+                if (!canFastForward()) return;
+
+                for (let i = 1; i < BATTLE_FAST_FORWARD_MULTIPLIER; i++) {
+                    _update.call(this, timeActive);
                 }
             };
         }
