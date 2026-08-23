@@ -1,0 +1,3 @@
+Drop game-specific custom cheat files here, named directly after the game's
+RJ product ID (e.g. RJ258412.js or RJ258412.json). The GUI installer
+(install-gui.js) scans this folder for files matching that pattern.

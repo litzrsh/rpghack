@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RPG Maker Unified Cheat Installer</title>
+<style>
+    /* ---------------------------------------------------------------
+       Cyberpunk Cyber-Cyan & Dark-Gray theme.
+       All colors are centralized here as custom properties so the rest
+       of the stylesheet never hardcodes a hex value.
+    --------------------------------------------------------------- */
+    :root {
+        --bg: #121214;
+        --panel: #1a1a1e;
+        --panel-border: #2a2a30;
+        --cyan: #00f0ff;
+        --blue: #0066ff;
+        --green: #39ff14;
+        --red: #ff3b5c;
+        --text: #d8f8ff;
+        --text-dim: #7a8a90;
+        --font-mono: "Consolas", "SFMono-Regular", "Cascadia Code", "Courier New", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-mono);
+        min-height: 100vh;
+    }
+
+    /* Faint scanline + grid backdrop for the cyberpunk feel, purely decorative. */
+    body {
+        background-image:
+            linear-gradient(rgba(0, 240, 255, 0.035) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(0, 240, 255, 0.035) 1px, transparent 1px);
+        background-size: 28px 28px;
+    }
+
+    .app-shell {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 32px 24px 64px;
+    }
+
+    /* ================= Zone 1: Header ================= */
+    .header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        border-bottom: 1px solid var(--panel-border);
+        padding-bottom: 20px;
+        margin-bottom: 28px;
+    }
+
+    .header h1 {
+        margin: 0;
+        font-size: 1.6rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        color: var(--cyan);
+        text-shadow: 0 0 6px rgba(0, 240, 255, 0.55), 0 0 18px rgba(0, 240, 255, 0.25);
+    }
+
+    .header .subtitle {
+        margin: 4px 0 0;
+        font-size: 0.8rem;
+        color: var(--text-dim);
+        letter-spacing: 0.03em;
+    }
+
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 16px;
+        border-radius: 4px;
+        font-size: 0.85rem;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        border: 1px solid currentColor;
+        background: rgba(255, 255, 255, 0.03);
+        transition: all 0.2s ease;
+        white-space: nowrap;
+    }
+
+    .badge .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: currentColor;
+        box-shadow: 0 0 8px currentColor;
+    }
+
+    .badge.state-idle { color: var(--text-dim); }
+    .badge.state-mv { color: var(--green); text-shadow: 0 0 8px currentColor; }
+    .badge.state-mz { color: #4fa8ff; text-shadow: 0 0 8px currentColor; }
+    .badge.state-none { color: var(--red); text-shadow: 0 0 8px currentColor; }
+
+    /* ================= Shared panel styling ================= */
+    .panel {
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        border-radius: 8px;
+        padding: 20px;
+    }
+
+    .panel h2 {
+        margin: 0 0 16px;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--cyan);
+        opacity: 0.85;
+    }
+
+    label {
+        display: block;
+        font-size: 0.75rem;
+        color: var(--text-dim);
+        margin-bottom: 6px;
+        letter-spacing: 0.03em;
+    }
+
+    input[type="text"] {
+        width: 100%;
+        padding: 10px 12px;
+        background: #0d0d0f;
+        border: 1px solid var(--panel-border);
+        border-radius: 4px;
+        color: var(--text);
+        font-family: var(--font-mono);
+        font-size: 0.9rem;
+        outline: none;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    input[type="text"]:focus {
+        border-color: var(--cyan);
+        box-shadow: 0 0 0 2px rgba(0, 240, 255, 0.15);
+    }
+
+    select {
+        width: 100%;
+        padding: 10px 12px;
+        background: #0d0d0f;
+        border: 1px solid var(--panel-border);
+        border-radius: 4px;
+        color: var(--text);
+        font-family: var(--font-mono);
+        font-size: 0.9rem;
+        outline: none;
+    }
+
+    select:focus { border-color: var(--cyan); }
+
+    .field { margin-bottom: 18px; }
+    .field:last-child { margin-bottom: 0; }
+
+    .hint {
+        margin-top: 6px;
+        font-size: 0.72rem;
+        color: var(--text-dim);
+    }
+
+    /* ================= Zone 2: Hybrid control panel ================= */
+    .control-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        margin-bottom: 24px;
+    }
+
+    @media (max-width: 720px) {
+        .control-grid { grid-template-columns: 1fr; }
+    }
+
+    /* Toggle switch ("Enable Safe Backup") */
+    .toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 12px;
+        background: #0d0d0f;
+        border: 1px solid var(--panel-border);
+        border-radius: 4px;
+    }
+
+    .toggle-row span { font-size: 0.85rem; }
+
+    .switch {
+        position: relative;
+        display: inline-block;
+        width: 44px;
+        height: 24px;
+        flex: none;
+    }
+
+    .switch input { opacity: 0; width: 0; height: 0; }
+
+    .switch .slider {
+        position: absolute;
+        inset: 0;
+        background: #2a2a30;
+        border-radius: 999px;
+        cursor: pointer;
+        transition: background 0.2s ease;
+    }
+
+    .switch .slider::before {
+        content: "";
+        position: absolute;
+        width: 18px;
+        height: 18px;
+        left: 3px;
+        top: 3px;
+        background: var(--text-dim);
+        border-radius: 50%;
+        transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .switch input:checked + .slider {
+        background: rgba(0, 240, 255, 0.18);
+        box-shadow: inset 0 0 0 1px var(--cyan);
+    }
+
+    .switch input:checked + .slider::before {
+        transform: translateX(20px);
+        background: var(--cyan);
+        box-shadow: 0 0 8px var(--cyan);
+    }
+
+    .divider-or {
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-dim);
+        margin: 14px 0;
+        letter-spacing: 0.1em;
+    }
+
+    /* Centered inject button */
+    .inject-row {
+        display: flex;
+        justify-content: center;
+        margin-bottom: 28px;
+    }
+
+    .inject-button {
+        position: relative;
+        padding: 16px 48px;
+        font-family: var(--font-mono);
+        font-size: 1rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        color: #04181a;
+        background: linear-gradient(135deg, var(--cyan), var(--blue));
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        box-shadow: 0 0 16px rgba(0, 240, 255, 0.45), 0 0 40px rgba(0, 102, 255, 0.25);
+        animation: pulse-glow 2.2s ease-in-out infinite;
+        transition: transform 0.12s ease, box-shadow 0.2s ease;
+    }
+
+    .inject-button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 0 24px rgba(0, 240, 255, 0.7), 0 0 60px rgba(0, 102, 255, 0.4);
+    }
+
+    .inject-button:active { transform: translateY(0); }
+
+    .inject-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+        animation: none;
+        box-shadow: none;
+    }
+
+    @keyframes pulse-glow {
+        0%, 100% { box-shadow: 0 0 16px rgba(0, 240, 255, 0.45), 0 0 40px rgba(0, 102, 255, 0.25); }
+        50% { box-shadow: 0 0 26px rgba(0, 240, 255, 0.85), 0 0 60px rgba(0, 102, 255, 0.45); }
+    }
+
+    /* ================= Zone 3: Console terminal ================= */
+    .terminal-panel h2 { display: flex; align-items: center; justify-content: space-between; }
+    .terminal-panel h2 .status { font-size: 0.7rem; color: var(--text-dim); text-transform: none; letter-spacing: 0; }
+
+    .terminal {
+        background: #000;
+        border: 1px solid var(--panel-border);
+        border-radius: 6px;
+        padding: 14px 16px;
+        height: 320px;
+        overflow-y: auto;
+        font-size: 0.82rem;
+        line-height: 1.55;
+    }
+
+    .terminal-line {
+        color: var(--green);
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+
+    .terminal-line.log::before { content: "> "; opacity: 0.6; }
+    .terminal-line.error { color: var(--red); }
+    .terminal-line.error::before { content: "!! "; }
+    .terminal-line.success { color: var(--cyan); font-weight: 700; }
+    .terminal-line.success::before { content: "OK "; }
+    .terminal-line.system { color: var(--text-dim); }
+    .terminal-line.system::before { content: "# "; }
+
+    footer.note {
+        margin-top: 18px;
+        font-size: 0.72rem;
+        color: var(--text-dim);
+        text-align: center;
+    }
+</style>
+</head>
+<body>
+<div class="app-shell">
+
+    <!-- ================= Zone 1: Header ================= -->
+    <header class="header">
+        <div>
+            <h1>RPG Maker Unified Cheat Installer</h1>
+            <p class="subtitle">CheatEngine_Core / CheatEngine_UI zero-dependency GUI installer</p>
+        </div>
+        <div id="engine-badge" class="badge state-idle">
+            <span class="dot"></span>
+            <span id="engine-badge-text">Awaiting Path</span>
+        </div>
+    </header>
+
+    <!-- ================= Zone 2: Hybrid control panel ================= -->
+    <div class="control-grid">
+
+        <!-- Left column: directory setup -->
+        <section class="panel">
+            <h2>Directory Setup</h2>
+            <div class="field">
+                <label for="game-dir">Target game folder path</label>
+                <input type="text" id="game-dir" placeholder="C:\Games\MyRpgMakerProject" autocomplete="off" spellcheck="false" />
+                <p class="hint">Folder containing either "www/" (MV) or "js/" (MZ) directly.</p>
+            </div>
+            <div class="field">
+                <div class="toggle-row">
+                    <span>Enable Safe Backup (plugins.js.bak)</span>
+                    <label class="switch">
+                        <input type="checkbox" id="backup-toggle" checked />
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right column: cheat file selector -->
+        <section class="panel">
+            <h2>Cheat File Selector</h2>
+            <div class="field">
+                <label for="cheat-select">Scanned custom cheats (custom_cheats/)</label>
+                <select id="cheat-select">
+                    <option value="">-- Core engine only --</option>
+                </select>
+            </div>
+            <div class="divider-or">— OR MANUAL ENTRY —</div>
+            <div class="field">
+                <label for="manual-rj-id">Direct RJ ID</label>
+                <input type="text" id="manual-rj-id" placeholder="RJ098765" autocomplete="off" spellcheck="false" />
+                <p class="hint">Used only if no file above is selected. Generates a skeleton cheat tab.</p>
+            </div>
+        </section>
+    </div>
+
+    <!-- Centered inject button -->
+    <div class="inject-row">
+        <button id="inject-button" class="inject-button" type="button">[ INJECT CHEAT ENGINE ]</button>
+    </div>
+
+    <!-- ================= Zone 3: Console terminal ================= -->
+    <section class="panel terminal-panel">
+        <h2>
+            <span>Real-Time Console</span>
+            <span id="terminal-status" class="status">idle</span>
+        </h2>
+        <div id="terminal" class="terminal">
+            <div class="terminal-line system">Installer ready. Enter a game folder path and press INJECT CHEAT ENGINE.</div>
+        </div>
+    </section>
+
+    <footer class="note">Zero-dependency installer -- Node core modules only. Close this tab to stop the local server.</footer>
+</div>
+
+<script>
+(() => {
+    "use strict";
+
+    const gameDirInput = document.getElementById("game-dir");
+    const backupToggle = document.getElementById("backup-toggle");
+    const cheatSelect = document.getElementById("cheat-select");
+    const manualRjIdInput = document.getElementById("manual-rj-id");
+    const injectButton = document.getElementById("inject-button");
+    const terminalEl = document.getElementById("terminal");
+    const terminalStatusEl = document.getElementById("terminal-status");
+    const badgeEl = document.getElementById("engine-badge");
+    const badgeTextEl = document.getElementById("engine-badge-text");
+
+    //-------------------------------------------------------------
+    // Console terminal helper
+    //-------------------------------------------------------------
+    function appendLine(text, kind) {
+        const line = document.createElement("div");
+        line.className = "terminal-line " + (kind || "log");
+        line.textContent = text;
+        terminalEl.appendChild(line);
+        terminalEl.scrollTop = terminalEl.scrollHeight;
+    }
+
+    //-------------------------------------------------------------
+    // Engine detector badge
+    //-------------------------------------------------------------
+    function setBadge(state, text) {
+        badgeEl.className = "badge state-" + state;
+        badgeTextEl.textContent = text;
+    }
+
+    let detectTimer = null;
+    function scheduleDetect() {
+        clearTimeout(detectTimer);
+        const dir = gameDirInput.value.trim();
+        if (!dir) {
+            setBadge("idle", "Awaiting Path");
+            return;
+        }
+        detectTimer = setTimeout(() => runDetect(dir), 400);
+    }
+
+    async function runDetect(dir) {
+        try {
+            const res = await fetch("/api/detect?dir=" + encodeURIComponent(dir));
+            const data = await res.json();
+            if (data.engine === "MV") {
+                setBadge("mv", "[ MV Detected ]");
+            } else if (data.engine === "MZ") {
+                setBadge("mz", "[ MZ Detected ]");
+            } else {
+                setBadge("none", "[ No Engine Found ]");
+            }
+        } catch (err) {
+            setBadge("none", "[ No Engine Found ]");
+        }
+    }
+
+    gameDirInput.addEventListener("input", scheduleDetect);
+
+    //-------------------------------------------------------------
+    // Populate the cheat-file dropdown from /api/scan on load
+    //-------------------------------------------------------------
+    async function loadScannedCheats() {
+        try {
+            const res = await fetch("/api/scan");
+            const data = await res.json();
+            const files = Array.isArray(data.files) ? data.files : [];
+            for (const file of files) {
+                const opt = document.createElement("option");
+                opt.value = file;
+                opt.textContent = file;
+                cheatSelect.appendChild(opt);
+            }
+            if (files.length === 0) {
+                appendLine("No custom cheats found in custom_cheats/ -- add RJ*.js files there, or use manual entry below.", "system");
+            } else {
+                appendLine("Scanned " + files.length + " custom cheat file(s) from custom_cheats/.", "system");
+            }
+        } catch (err) {
+            appendLine("Failed to scan custom_cheats/: " + err.message, "error");
+        }
+    }
+
+    //-------------------------------------------------------------
+    // Inject: POST /api/inject and stream the response line by line
+    //-------------------------------------------------------------
+    function setBusy(busy) {
+        injectButton.disabled = busy;
+        terminalStatusEl.textContent = busy ? "running..." : "idle";
+    }
+
+    async function inject() {
+        const payload = {
+            gameDir: gameDirInput.value.trim(),
+            selectedCheat: cheatSelect.value,
+            manualRjId: manualRjIdInput.value.trim(),
+            backupEnabled: backupToggle.checked
+        };
+
+        if (!payload.gameDir) {
+            appendLine("Please enter the target game folder path first.", "error");
+            return;
+        }
+
+        setBusy(true);
+        appendLine("Starting injection...", "system");
+
+        try {
+            const response = await fetch("/api/inject", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.body) {
+                // Extremely old browsers without streaming fetch: fall back
+                // to reading the whole response at once.
+                const text = await response.text();
+                text.split("\n").forEach(processStreamLine);
+                setBusy(false);
+                return;
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split("\n");
+                buffer = lines.pop(); // last (possibly incomplete) line stays buffered
+                lines.forEach(processStreamLine);
+            }
+            if (buffer) processStreamLine(buffer);
+        } catch (err) {
+            appendLine("Connection error: " + err.message, "error");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    function processStreamLine(rawLine) {
+        const line = rawLine.trim();
+        if (!line) return;
+
+        const separatorIndex = line.indexOf(":");
+        if (separatorIndex === -1) {
+            appendLine(line, "log");
+            return;
+        }
+        const tag = line.slice(0, separatorIndex);
+        const jsonPart = line.slice(separatorIndex + 1);
+
+        let payload;
+        try {
+            payload = JSON.parse(jsonPart);
+        } catch (err) {
+            appendLine(line, "log");
+            return;
+        }
+
+        if (tag === "LOG") {
+            appendLine(payload.message, "log");
+        } else if (tag === "ERROR") {
+            appendLine(payload.message, "error");
+        } else if (tag === "DONE") {
+            appendLine(
+                "Installation finished successfully (" + payload.engine + (payload.cheatFile ? ", cheat: " + payload.cheatFile : "") + ").",
+                "success"
+            );
+        } else {
+            appendLine(line, "log");
+        }
+    }
+
+    injectButton.addEventListener("click", inject);
+
+    //-------------------------------------------------------------
+    // Tell the server to shut itself down once this tab is closed, so a
+    // stray "node install-gui.js" process doesn't keep running forever.
+    //-------------------------------------------------------------
+    window.addEventListener("pagehide", () => {
+        if (navigator.sendBeacon) {
+            navigator.sendBeacon("/api/shutdown");
+        }
+    });
+
+    loadScannedCheats();
+})();
+</script>
+</body>
+</html>
