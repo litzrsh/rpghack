@@ -1183,6 +1183,9 @@
         } else if (event.key === "F7") {
             event.preventDefault();
             CheatManager.setMessageSkip(!CheatManager.isMessageSkip());
+        } else if (event.key === "F12") {
+            event.preventDefault();
+            require("nw.gui").Window.get().showDevTools();
         }
     });
 
