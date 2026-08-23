@@ -57,7 +57,8 @@
  *     moves finish sooner, and screen tints/fades play back faster.
  *   - Battle: while battle isn't waiting on the player (no actor/target/
  *     skill/item selection, no open message), action execution, enemy AI
- *     turns, damage resolution, and battle log lines all advance faster too.
+ *     turns, damage resolution, battle log lines, screen flash/shake/tint,
+ *     and animation playback all advance faster too.
  *   Both bail back to normal 1x speed the instant the player needs to make
  *   an actual choice, so this only ever accelerates auto-progressing
  *   content, never a real decision point.
@@ -696,62 +697,82 @@ var CheatManager = CheatManager || null;
         }
 
         // Speeds up battle the same way _hookMapFastForward() speeds up the
-        // map: while Fast Message Skip is on, re-runs both BattleManager's
-        // own per-frame "advance the battle by one tick" update AND the
-        // battle log window's per-frame wait/queue processing several extra
-        // times per real render frame -- action execution, enemy AI turns,
-        // damage resolution, and battle log lines all play out faster.
-        // (Only accelerating BattleManager isn't enough on its own: it
-        // blocks on the log window still being "busy", and the log window
-        // paces itself independently -- see the Window_BattleLog block
-        // below for why both are hooked.)
+        // map: while Fast Message Skip is on, re-runs every mechanism that
+        // independently paces battle several extra times per real render
+        // frame -- BattleManager's own turn/action state machine, the
+        // battle log window's wait/queue processing, screen flash/shake/
+        // tint (Game_Screen), and animation sprite playback. Speeding up
+        // BattleManager alone barely shows: it blocks on the log window
+        // still being "busy", and the log window (plus Game_Screen and
+        // animation sprites) all pace themselves independently via their
+        // own per-frame counters, entirely separate from how many times
+        // BattleManager.update() ran in that same frame.
         //
-        // Hooking BattleManager.update / Window_BattleLog.update directly
-        // (instead of Scene_Battle's update, the way _hookMapFastForward
-        // hooks Scene_Map) means none of Scene_Battle's own window/input
-        // handling is ever re-run, so this carries none of the
-        // double-input-processing risk that ruled out just looping the
-        // whole scene update -- neither of these updates polls Input.
+        // Every one of these is hooked directly (instead of wrapping
+        // Scene_Battle's own update, the way _hookMapFastForward wraps
+        // Scene_Map's) so that none of Scene_Battle's window/input handling
+        // is ever re-run -- this carries none of the double-input-
+        // processing risk that ruled out just looping a whole scene update,
+        // since none of BattleManager/Window_BattleLog/Game_Screen/the
+        // animation sprites ever poll Input themselves.
         //
-        // Deliberately bails (falls back to plain 1x) whenever
-        // BattleManager.isInputting() is true (the player is choosing an
-        // actor's command, a target, a skill, or an item) or
-        // isWaitingForPlayerInput() is true (a message/choice/number/item
-        // window is open), for the same reason every other fast-forward hook
-        // does: fast-forwarding must never touch an actual player decision
-        // point, only auto-progressing content.
+        // Deliberately bails (falls back to plain 1x) whenever battle is
+        // waiting on an actual player decision -- an actor/target/skill/
+        // item selection (isBattleWaitingForCommand()) or an open message/
+        // choice/number/item window (isWaitingForPlayerInput()) -- for the
+        // same reason every other fast-forward hook does: fast-forwarding
+        // must never touch a real decision point, only auto-progressing
+        // content.
         _hookBattleFastForward() {
             if (typeof BattleManager === "undefined" || !BattleManager) return;
             const manager = this;
+
+            // BattleManager.isInputting() isn't guaranteed to exist on every
+            // engine version -- falling back to the raw _phase field it
+            // wraps means this still works even where the helper is
+            // missing, instead of canFastForward() silently always being
+            // false (which would make Fast Message Skip look like it does
+            // nothing at all in battle, regardless of on/off).
+            function isBattleWaitingForCommand() {
+                if (typeof BattleManager.isInputting === "function") {
+                    return BattleManager.isInputting();
+                }
+                return BattleManager._phase === "input";
+            }
 
             function canFastForward() {
                 return (
                     manager.isMessageSkip() &&
                     typeof $gameParty !== "undefined" && $gameParty && $gameParty.inBattle() &&
-                    typeof BattleManager.isInputting === "function" && !BattleManager.isInputting() &&
+                    !isBattleWaitingForCommand() &&
                     !isWaitingForPlayerInput()
                 );
             }
 
-            const _update = BattleManager.update;
-            BattleManager.update = function (timeActive) {
-                _update.call(this, timeActive);
-                if (!canFastForward()) return;
+            // Wraps `target[methodName]` so that, while canFastForward() is
+            // true, it runs several extra times per real render frame on
+            // top of its normal single call. Used identically below for
+            // every battle-pacing mechanism that (unlike an interactive
+            // window) never polls Input itself, so none of these carry the
+            // double-input-processing risk that rules out re-running a
+            // whole Scene's update.
+            function multiplyUpdate(target, methodName) {
+                if (!target || typeof target[methodName] !== "function") return;
+                const original = target[methodName];
+                target[methodName] = function (...args) {
+                    original.apply(this, args);
+                    if (!canFastForward()) return;
+                    for (let i = 1; i < BATTLE_FAST_FORWARD_MULTIPLIER; i++) {
+                        original.apply(this, args);
+                    }
+                };
+            }
 
-                for (let i = 1; i < BATTLE_FAST_FORWARD_MULTIPLIER; i++) {
-                    _update.call(this, timeActive);
-                }
-            };
+            // BattleManager's own "advance the battle by one tick" update
+            // (turn/action state machine, enemy AI, damage resolution).
+            multiplyUpdate(BattleManager, "update");
 
-            // BattleManager alone speeding up barely shows, because
-            // BattleManager.updateAction() blocks on the battle LOG window
-            // still being "busy" -- and Window_BattleLog paces itself
-            // through its own per-frame wait counter and queued "print this
-            // line / wait this many frames" methods, entirely independent of
-            // how many times BattleManager.update() ran in that same frame.
-            // The log window is the actual thing making battle feel slow
-            // (attack/skill-use/damage lines each pause between themselves),
-            // so it needs its own acceleration too.
+            // The battle log window (attack/skill-use/damage lines).
             if (typeof Window_BattleLog !== "undefined") {
                 // MZ's battle log already has a native "hold OK/Shift to
                 // speed up" mechanism: isFastForward() makes its wait
@@ -764,23 +785,30 @@ var CheatManager = CheatManager || null;
                         return canFastForward() || _logIsFastForward.call(this);
                     };
                 }
+                multiplyUpdate(Window_BattleLog.prototype, "update");
+            }
 
-                // On top of that -- and the only mechanism at all on MV,
-                // which has no isFastForward concept for the battle log --
-                // re-run the log window's own per-frame update several extra
-                // times. It never polls Input itself (it's not an
-                // interactive/selectable window), so this carries none of
-                // the double-input-processing risk that rules out
-                // re-running an interactive window's update.
-                const _logUpdate = Window_BattleLog.prototype.update;
-                Window_BattleLog.prototype.update = function () {
-                    _logUpdate.call(this);
-                    if (!canFastForward()) return;
+            // Screen flash/shake/tint (heavily used by hit effects) is
+            // driven by Game_Screen, updated once per frame by Scene_Battle
+            // -- the same fix _hookMapFastForward() already applies to it
+            // on the map.
+            if (typeof Game_Screen !== "undefined") {
+                multiplyUpdate(Game_Screen.prototype, "update");
+            }
 
-                    for (let i = 1; i < BATTLE_FAST_FORWARD_MULTIPLIER; i++) {
-                        _logUpdate.call(this);
-                    }
-                };
+            // Actual animation playback (weapon/skill effect sprites) is
+            // driven by per-frame duration counters on these sprite
+            // classes, entirely separate from both BattleManager and the
+            // log window -- neither polls Input, so speeding them up is
+            // just as safe. Sprite_AnimationMV is the legacy (pre-Effekseer)
+            // animation renderer some MZ projects and all MV projects use;
+            // Sprite_Animation is MZ's newer one. Both are checked since
+            // only one may exist depending on engine/version.
+            if (typeof Sprite_Animation !== "undefined") {
+                multiplyUpdate(Sprite_Animation.prototype, "update");
+            }
+            if (typeof Sprite_AnimationMV !== "undefined") {
+                multiplyUpdate(Sprite_AnimationMV.prototype, "update");
             }
         }
 
