@@ -1160,13 +1160,23 @@
             this._contentWindow = new Window_CheatContent(0, y, width, height);
             this.addWindow(this._contentWindow);
         }
+        // Deliberately NOT added via this.addWindow() (which would put it
+        // inside this._windowLayer, alongside the tab/content windows).
+        // WindowLayer uses a stencil-buffer trick so overlapping window
+        // backgrounds don't double-blend, and since Window_CheatContent's
+        // rect covers nearly the whole screen, that masking could still
+        // swallow this window in the overlap regardless of its order among
+        // WindowLayer's own children. Adding it as a direct child of the
+        // Scene instead -- rendered after _windowLayer in the Scene's own
+        // child list -- makes it plain, unambiguous top-most PIXI z-order,
+        // completely bypassing that masking.
         createNumberInputWindow() {
             const width = NUMBER_INPUT_WIDTH;
             const height = NUMBER_INPUT_HEIGHT;
             const x = (Graphics.boxWidth - width) / 2;
             const y = (Graphics.boxHeight - height) / 2;
             this._numberInputWindow = new Window_CheatNumberInput(x, y, width, height);
-            this.addWindow(this._numberInputWindow);
+            this.addChild(this._numberInputWindow);
         }
         onTabChange() {
             const tab = getActiveTabs()[this._tabWindow.index()];
@@ -1193,16 +1203,17 @@
             this._numberInputWindow.activate();
         }
         // Even though createNumberInputWindow() already runs last in create()
-        // (so it starts on top of the tab/content windows), re-adding it to
-        // the window layer immediately before every open is a cheap guard
-        // against any future change to that creation order silently putting
-        // it behind another window again -- removeChild + addChild moves it
-        // to the end of the layer's children, which PIXI always renders last
-        // (i.e. on top).
+        // (so it starts on top of everything else), re-adding it directly to
+        // the Scene immediately before every open is a cheap guard against
+        // any future change to that creation order, or against some other
+        // plugin adding its own window/sprite to the Scene afterward --
+        // removeChild + addChild moves it to the very end of the Scene's own
+        // children, which PIXI always renders last (i.e. on top of
+        // everything, including the entire _windowLayer).
         _bringNumberInputToFront() {
-            if (this._numberInputWindow && this._windowLayer) {
-                this._windowLayer.removeChild(this._numberInputWindow);
-                this._windowLayer.addChild(this._numberInputWindow);
+            if (this._numberInputWindow) {
+                this.removeChild(this._numberInputWindow);
+                this.addChild(this._numberInputWindow);
             }
         }
         onNumberInputOk() {
