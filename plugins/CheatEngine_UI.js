@@ -1188,8 +1188,22 @@
         onRequestDirectInput(descriptor) {
             this._contentWindow.deactivate();
             this._numberInputWindow.setup(descriptor);
+            this._bringNumberInputToFront();
             this._numberInputWindow.show();
             this._numberInputWindow.activate();
+        }
+        // Even though createNumberInputWindow() already runs last in create()
+        // (so it starts on top of the tab/content windows), re-adding it to
+        // the window layer immediately before every open is a cheap guard
+        // against any future change to that creation order silently putting
+        // it behind another window again -- removeChild + addChild moves it
+        // to the end of the layer's children, which PIXI always renders last
+        // (i.e. on top).
+        _bringNumberInputToFront() {
+            if (this._numberInputWindow && this._windowLayer) {
+                this._windowLayer.removeChild(this._numberInputWindow);
+                this._windowLayer.addChild(this._numberInputWindow);
+            }
         }
         onNumberInputOk() {
             const d = this._numberInputWindow.getDescriptor();
