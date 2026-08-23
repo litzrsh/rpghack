@@ -2,7 +2,7 @@
 // CheatEngine_Core.js
 //=============================================================================
 /*:
- * @plugindesc [Cheat Engine] Core v1.3.0 - Pure-logic cheat engine core for RPG Maker MV/MZ (no UI).
+ * @plugindesc [Cheat Engine] Core v1.4.0 - Pure-logic cheat engine core for RPG Maker MV/MZ (no UI).
  * @author rpghack
  * @url
  *
@@ -42,6 +42,15 @@
  *   - Controlled by the "Persist Cheat State On Load" parameter above.
  *   - Starting a brand new game always resets cheat state, regardless of the
  *     parameter (there is nothing to restore).
+ *
+ * Party-wide toggles:
+ *   - Party God Mode (setPartyGodMode/isPartyGodMode): locks every actor's
+ *     HP/MP/TP to maximum at all times, independent of per-member God Mode.
+ *   - Infinite Items (setInfiniteItems/isInfiniteItems): no consumable item's
+ *     held quantity is ever reduced, independent of the per-item lock.
+ *   - Instant Kill (setInstantKillMode/isInstantKillMode): any action an
+ *     actor applies to an enemy kills it outright, regardless of damage
+ *     formula, guard, or elemental rate.
  *
  * Plugin Command: none (pure script API).
  * -----------------------------------------------------------------------------
@@ -197,10 +206,12 @@ var CheatManager = CheatManager || null;
             this._state = {
                 messageSkip: false,
                 godModeActorIds: new Set(), // actorIds of party members with God Mode turned on, tracked individually
+                partyGodMode: false, // party-wide toggle: locks HP/MP/TP to max for every actor at once
                 instantKillMode: false,
                 moveSpeedMultiplier: 1,
                 gameSpeedMultiplier: 1,
                 statMultipliers: Object.create(null), // paramId -> multiplier
+                infiniteItemsGlobal: false, // party-wide toggle: no consumable item ever depletes
                 infiniteItemKeys: new Set(), // "I1"/"W1"/"A1" -> per-item infinite (ignore consumption) flag
                 lockedItems: new Map() // "I1"/"W1"/"A1" -> { item, amount }
             };
@@ -284,6 +295,18 @@ var CheatManager = CheatManager || null;
             return this._state.instantKillMode;
         }
 
+        /**
+         * Party-wide toggle: while ON, every actor's HP/MP/TP is locked to its
+         * maximum at all times (see _hookPartyGodMode()). Independent from the
+         * per-member God Mode above -- both can be used at once with no conflict.
+         */
+        setPartyGodMode(flag) {
+            this._state.partyGodMode = !!flag;
+        }
+        isPartyGodMode() {
+            return this._state.partyGodMode;
+        }
+
         /** Instantly kills the given battler (for manual/scripted calls). */
         killBattler(battler) {
             if (!battler) return;
@@ -313,12 +336,23 @@ var CheatManager = CheatManager || null;
 
         // ================= Items / Armors =================
         /**
+         * Party-wide toggle: while ON, no consumable item's held quantity is
+         * ever reduced by Game_Party.prototype.loseItem (see _hookLoseItem()
+         * below). Distinct from the per-item lock below, which fixes one
+         * specific item/weapon/armor's quantity regardless of this switch.
+         */
+        setInfiniteItems(flag) {
+            this._state.infiniteItemsGlobal = !!flag;
+        }
+        isInfiniteItems() {
+            return this._state.infiniteItemsGlobal;
+        }
+
+        /**
          * Turns "doesn't decrease on consumption" on/off for an individual
-         * item. Equipment (weapons/armor) is not normally consumed, so this
-         * API is intended mainly for consumables.
-         * (The old global setInfiniteItems() was replaced with per-item
-         * control, since $dataItems can contain entries that aren't actually
-         * meant to be consumed at all.)
+         * item, independent of the party-wide switch above. Equipment
+         * (weapons/armor) is not normally consumed, so this API is intended
+         * mainly for consumables.
          */
         setItemInfinite(item, flag) {
             if (!item) return;
@@ -405,10 +439,12 @@ var CheatManager = CheatManager || null;
             return {
                 messageSkip: this._state.messageSkip,
                 godModeActorIds: Array.from(this._state.godModeActorIds),
+                partyGodMode: this._state.partyGodMode,
                 instantKillMode: this._state.instantKillMode,
                 moveSpeedMultiplier: this._state.moveSpeedMultiplier,
                 gameSpeedMultiplier: this._state.gameSpeedMultiplier,
                 statMultipliers: Object.assign({}, this._state.statMultipliers),
+                infiniteItemsGlobal: this._state.infiniteItemsGlobal,
                 infiniteItems,
                 lockedItems
             };
@@ -422,9 +458,11 @@ var CheatManager = CheatManager || null;
             this.setMessageSkip(data.messageSkip);
             this._state.godModeActorIds.clear();
             (data.godModeActorIds || []).forEach((actorId) => this.setGodMode(actorId, true));
+            this.setPartyGodMode(data.partyGodMode);
             this.setInstantKillMode(data.instantKillMode);
             this.setMoveSpeedMultiplier(data.moveSpeedMultiplier);
             this.setGameSpeed(data.gameSpeedMultiplier);
+            this.setInfiniteItems(data.infiniteItemsGlobal);
 
             this.clearStatMultipliers();
             if (data.statMultipliers) {
@@ -449,7 +487,9 @@ var CheatManager = CheatManager || null;
         resetSessionState() {
             this.setMessageSkip(false);
             this._state.godModeActorIds.clear();
+            this.setPartyGodMode(false);
             this.setInstantKillMode(false);
+            this.setInfiniteItems(false);
             this._state.infiniteItemKeys.clear();
             this.clearStatMultipliers();
             this._state.lockedItems.clear();
@@ -461,6 +501,7 @@ var CheatManager = CheatManager || null;
         _installHooks() {
             this._hookMessageSkip();
             this._hookGodMode();
+            this._hookPartyGodMode();
             this._hookInstantKill();
             this._hookStatMultiplier();
             this._hookMoveSpeed();
@@ -679,20 +720,59 @@ var CheatManager = CheatManager || null;
             }
         }
 
-        // Forces damage the party (allies) deals to enemies to an instant-kill level.
+        // Party God Mode: a single party-wide switch that locks every actor's
+        // HP/MP/TP to maximum at all times, independent of the per-member God
+        // Mode above. Hooked directly on Game_BattlerBase#setHp/setMp/setTp
+        // (the single choke point every HP/MP/TP change funnels through --
+        // Game_Battler#gainHp/gainMp/gainTp all call these internally) rather
+        // than reacting after the fact in refresh(), so it can never be
+        // bypassed by a plugin or action sequence that writes HP/MP/TP some
+        // other way but still goes through these setters.
+        _hookPartyGodMode() {
+            if (typeof Game_BattlerBase === "undefined") return;
+            const manager = this;
+
+            function isPartyGodModeActor(battler) {
+                return manager.isPartyGodMode() && typeof battler.isActor === "function" && battler.isActor();
+            }
+
+            const _setHp = Game_BattlerBase.prototype.setHp;
+            Game_BattlerBase.prototype.setHp = function (hp) {
+                _setHp.call(this, isPartyGodModeActor(this) ? this.mhp : hp);
+            };
+
+            const _setMp = Game_BattlerBase.prototype.setMp;
+            Game_BattlerBase.prototype.setMp = function (mp) {
+                _setMp.call(this, isPartyGodModeActor(this) ? this.mmp : mp);
+            };
+
+            const _setTp = Game_BattlerBase.prototype.setTp;
+            Game_BattlerBase.prototype.setTp = function (tp) {
+                const maxTp = typeof this.maxTp === "function" ? this.maxTp() : tp;
+                _setTp.call(this, isPartyGodModeActor(this) ? maxTp : tp);
+            };
+        }
+
+        // Instant Kill: rather than hacking the damage formula (unreliable,
+        // since guard states/element rates/direct action overrides can all
+        // change or skip the damage calculation before it ever reaches HP),
+        // this hooks Game_Action.prototype.apply -- the single point every
+        // action's effect on a target passes through regardless of how its
+        // damage was computed -- and forces the target dead immediately after
+        // the action has been fully applied.
         _hookInstantKill() {
             if (typeof Game_Action === "undefined") return;
             const manager = this;
-            const _makeDamageValue = Game_Action.prototype.makeDamageValue;
-            Game_Action.prototype.makeDamageValue = function (target, critical) {
+            const _apply = Game_Action.prototype.apply;
+            Game_Action.prototype.apply = function (target) {
+                _apply.call(this, target);
                 if (
                     manager.isInstantKillMode() &&
                     target && typeof target.isEnemy === "function" && target.isEnemy() &&
                     this.subject && this.subject() && typeof this.subject().isActor === "function" && this.subject().isActor()
                 ) {
-                    return (target.mhp || 9999) * 999;
+                    manager.killBattler(target);
                 }
-                return _makeDamageValue.call(this, target, critical);
             };
         }
 
@@ -720,7 +800,17 @@ var CheatManager = CheatManager || null;
             };
         }
 
-        // Intercepts loseItem: infinite items / fixed held quantity.
+        // Intercepts loseItem: party-wide infinite consumables, per-item
+        // infinite flag, and fixed held quantity locks.
+        //
+        // RPG Maker MV/MZ always routes item consumption through
+        // Game_Party.prototype.loseItem (Game_Action#applyItemUserEffect ->
+        // subject().consumeItem() -> $gameParty.consumeItem() -> loseItem()),
+        // so hooking this single spot and bypassing the subtraction entirely
+        // -- instead of letting the original run and then resetting the
+        // container's quantity back afterward -- is both simpler and safe
+        // against any action sequencer that reads the quantity mid-effect,
+        // since the held amount never actually changes in the first place.
         _hookLoseItem() {
             if (typeof Game_Party === "undefined") return;
             const manager = this;
@@ -728,17 +818,14 @@ var CheatManager = CheatManager || null;
             Game_Party.prototype.loseItem = function (item, amount, includeEquip) {
                 if (!item) return;
 
-                if (amount < 0 && manager.isItemInfinite(item)) {
-                    return; // Only ignore this item's consumption (decrease), effectively making it infinite
+                const isGloballyInfiniteConsumable =
+                    DataManager.isItem(item) && !!item.consumable && manager.isInfiniteItems();
+
+                if (isGloballyInfiniteConsumable || manager.isItemInfinite(item) || manager.isItemQuantityLocked(item)) {
+                    return; // Bypass the subtraction completely -- held quantity never changes.
                 }
 
                 _loseItem.call(this, item, amount, includeEquip);
-
-                const lock = manager._state.lockedItems.get(manager._itemKey(item));
-                if (lock) {
-                    const container = RpgBridge.itemContainer(item);
-                    if (container) container[item.id] = lock.amount;
-                }
             };
         }
 

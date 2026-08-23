@@ -6,7 +6,10 @@
 // performs the same job install.js does (copy plugin files, register them in
 // the target game's plugins.js), but with live engine detection, a scanned
 // list of game-specific "custom cheats", and step-by-step progress streamed
-// back to the browser as the install runs.
+// back to the browser as the install runs. Also exposes a matching
+// /api/uninstall endpoint that reverts an install: restores plugins.js (from
+// its .bak backup, or by stripping Cheat Engine entries directly if no
+// backup exists) and deletes the plugin files from disk.
 //
 // Deliberately uses ONLY Node core modules (http, fs, path, child_process) --
 // no npm packages, so it runs with nothing but a plain `node install-gui.js`.
@@ -39,6 +42,10 @@ const MAX_PORT_ATTEMPTS = 10;
 // ships in plugins/.
 const RJ_FILENAME_PATTERN = /^RJ[0-9A-Za-z]*\.(js|json)$/i;
 const RJ_ID_PATTERN = /^RJ\d+$/i;
+// Matches a plugins.js registry entry's "name" field (filename, no
+// extension) for a custom RJ cheat -- looser than RJ_ID_PATTERN since a
+// scanned custom_cheats/ file may carry letters after "RJ", not just digits.
+const RJ_NAME_PATTERN = /^RJ[0-9A-Za-z]*$/i;
 
 //-----------------------------------------------------------------------
 // Small helpers
@@ -419,11 +426,108 @@ async function handleInject(req, res) {
         logger.log("Injection complete.");
         logger.done({
             success: true,
+            action: "inject",
             engine: detected.engine,
             pluginsDir: detected.pluginsDir,
             cheatFile: cheatFileName,
             generated: cheatIsGenerated
         });
+    } catch (err) {
+        logger.fail(`Unexpected error: ${err.message}`);
+    }
+}
+
+//-----------------------------------------------------------------------
+// POST /api/uninstall -- reverts an install performed by /api/inject
+//-----------------------------------------------------------------------
+
+async function handleUninstall(req, res) {
+    const logger = createLogger(res);
+    res.writeHead(200, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Transfer-Encoding": "chunked",
+        "Cache-Control": "no-cache"
+    });
+
+    try {
+        const body = await readJsonBody(req);
+        const gameDirInput = typeof body.gameDir === "string" ? body.gameDir.trim() : "";
+
+        if (!gameDirInput) {
+            return logger.fail("Please enter the target game folder path.");
+        }
+        const gameDir = path.resolve(gameDirInput);
+        if (!fs.existsSync(gameDir) || !fs.statSync(gameDir).isDirectory()) {
+            return logger.fail(`Folder not found: ${gameDir}`);
+        }
+        logger.log(`Target game folder: ${gameDir}`);
+
+        const detected = detectEngine(gameDir);
+        if (!detected) {
+            return logger.fail(
+                "Could not detect an RPG Maker MV or MZ project here (no www/ folder and no js/plugins/ folder found)."
+            );
+        }
+        logger.log(`Engine detected: RPG Maker ${detected.engine}`);
+        logger.log(`Plugins directory: ${detected.pluginsDir}`);
+
+        if (!fs.existsSync(detected.pluginsJsPath)) {
+            return logger.fail(`plugins.js not found: ${detected.pluginsJsPath}`);
+        }
+
+        // Step 1: revert plugins.js -- restore the .bak backup if one exists,
+        // otherwise strip Cheat Engine entries out of the live file directly.
+        const backupPath = `${detected.pluginsJsPath}.bak`;
+        if (fs.existsSync(backupPath)) {
+            fs.copyFileSync(backupPath, detected.pluginsJsPath);
+            fs.unlinkSync(backupPath);
+            logger.log(`Restored plugins.js from backup and removed ${path.basename(backupPath)}.`);
+        } else {
+            logger.log("No backup file found -- stripping Cheat Engine entries out of plugins.js directly.");
+            const { list, header } = readPluginsList(detected.pluginsJsPath);
+            const removedNames = [];
+            const keptList = list.filter((p) => {
+                const name = (p && p.name) || "";
+                const isCoreEngine = name === "CheatEngine_Core" || name === "CheatEngine_UI";
+                const isRjCustom = RJ_NAME_PATTERN.test(name);
+                if (isCoreEngine || isRjCustom) {
+                    removedNames.push(name);
+                    return false;
+                }
+                return true;
+            });
+            writePluginsList(detected.pluginsJsPath, header, keptList);
+            if (removedNames.length > 0) {
+                removedNames.forEach((name) => logger.log(`plugins.js: removed entry -> ${name}`));
+            } else {
+                logger.log("plugins.js: no Cheat Engine entries were found to remove.");
+            }
+        }
+
+        // Step 2: delete the plugin files themselves from disk -- the two
+        // core files plus any scanned custom RJ*.js/json cheat files sitting
+        // in the game's plugins directory.
+        const filesToDelete = new Set(CORE_PLUGIN_FILES);
+        if (fs.existsSync(detected.pluginsDir)) {
+            for (const name of fs.readdirSync(detected.pluginsDir)) {
+                if (RJ_FILENAME_PATTERN.test(name)) filesToDelete.add(name);
+            }
+        }
+        let deletedCount = 0;
+        for (const fileName of filesToDelete) {
+            const filePath = path.join(detected.pluginsDir, fileName);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+                logger.log(`Deleted: ${fileName}`);
+                deletedCount++;
+            }
+        }
+        if (deletedCount === 0) {
+            logger.log("No Cheat Engine plugin files were found on disk to delete.");
+        }
+
+        logger.log("Uninstall complete.");
+        logger.done({ success: true, action: "uninstall", engine: detected.engine, pluginsDir: detected.pluginsDir });
     } catch (err) {
         logger.fail(`Unexpected error: ${err.message}`);
     }
@@ -470,6 +574,9 @@ function requestListener(req, res) {
     }
     if (req.method === "POST" && url.pathname === "/api/inject") {
         return handleInject(req, res);
+    }
+    if (req.method === "POST" && url.pathname === "/api/uninstall") {
+        return handleUninstall(req, res);
     }
     if (req.method === "POST" && url.pathname === "/api/shutdown") {
         // The frontend calls this (via navigator.sendBeacon) when the

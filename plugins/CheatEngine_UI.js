@@ -2,7 +2,7 @@
 // CheatEngine_UI.js
 //=============================================================================
 /*:
- * @plugindesc [Cheat Engine] UI v2.3.0 - In-game cheat menu UI consuming CheatEngine_Core.js.
+ * @plugindesc [Cheat Engine] UI v2.4.0 - In-game cheat menu UI consuming CheatEngine_Core.js.
  * @author rpghack
  * @base CheatEngine_Core
  * @orderAfter CheatEngine_Core
@@ -42,7 +42,7 @@
  * @text Enable "Party" Tab
  * @type boolean
  * @default true
- * @desc Show the Party tab (every party member's level/EXP/params/full-heal/God Mode, in-battle enemy Instant Kill) in the tab bar.
+ * @desc Show the Party tab (party-wide God Mode/Instant Kill, plus every member's level/EXP/params/full-heal/God Mode) in the tab bar.
  *
  * @param enableItemsTab
  * @text Enable "Items" Tab
@@ -95,12 +95,15 @@
  *   - X (cancel) : content list -> back to tab bar; tab bar -> close menu
  *   - Shift      : open the direct-input overlay (number/item qty/variable)
  *
- * The Party tab has no party-member switching (no PageUp/PageDown, no touch
- * UI for it) -- instead every current party member's block is listed one
- * after another in a single scrollable list, each starting with a
- * non-selectable "[ Character: Name ]" header row followed by that member's
- * own one-shot "Full Heal HP/MP/TP" action row (Z or Left/Right executes it
- * immediately), Level/EXP, God Mode toggle, and per-character param bonuses.
+ * The Party tab opens with a "[ Party-Wide Options ]" section -- Party God
+ * Mode (locks every member's HP/MP/TP to max at once) and Party Instant Kill
+ * Enemies (any actor action kills an enemy outright) -- followed by every
+ * current party member's own block, one after another in a single scrollable
+ * list (no party-member switching, no PageUp/PageDown, no touch UI for it).
+ * Each member's block starts with a non-selectable "[ Character: Name ]"
+ * header row followed by that member's own one-shot "Full Heal HP/MP/TP"
+ * action row (Z or Left/Right executes it immediately), Level/EXP, an
+ * individual God Mode toggle, and per-character param bonuses.
  * The Skills tab still always targets the party leader ($gameParty.leader())
  * since a skill grid only makes sense for one character at a time.
  *
@@ -328,12 +331,6 @@
             get: () => CheatManager.isGodMode(actor.actorId()),
             set: (v) => CheatManager.setGodMode(actor.actorId(), v)
         });
-        list.push({
-            name: "Instant Kill Mode (Party -> Enemy)",
-            type: "boolean",
-            get: () => CheatManager.isInstantKillMode(),
-            set: (v) => CheatManager.setInstantKillMode(v)
-        });
         for (let paramId = 0; paramId < PARAM_NAMES.length; paramId++) {
             list.push({
                 name: `${PARAM_NAMES[paramId]} +/- (This Character)`,
@@ -343,6 +340,27 @@
             });
         }
         return list;
+    }
+
+    // Party-wide options shown at the very top of the Party tab, above every
+    // individual member's block: a single toggle affecting the whole party at
+    // once, rather than one member at a time.
+    function buildPartyLevelDescriptors() {
+        return [
+            { name: `▼ [ Party-Wide Options ]  ${"─".repeat(16)}`, type: "info", get: () => "" },
+            {
+                name: "Party God Mode (All Members)",
+                type: "boolean",
+                get: () => CheatManager.isPartyGodMode(),
+                set: (v) => CheatManager.setPartyGodMode(v)
+            },
+            {
+                name: "Party Instant Kill Enemies",
+                type: "boolean",
+                get: () => CheatManager.isInstantKillMode(),
+                set: (v) => CheatManager.setInstantKillMode(v)
+            }
+        ];
     }
 
     function buildPartyGlobalDescriptors() {
@@ -408,6 +426,7 @@
             ? $gameParty.members()
             : [];
         const list = [];
+        list.push(...buildPartyLevelDescriptors());
         for (const member of members) {
             list.push(...buildActorDescriptors(member));
         }
@@ -465,7 +484,16 @@
     }
 
     function buildItemsDescriptors() {
-        return buildItemLikeDescriptors(typeof $dataItems !== "undefined" ? $dataItems : null);
+        const list = [
+            {
+                name: "Infinite Items (No Consume, All Consumables)",
+                type: "boolean",
+                get: () => CheatManager.isInfiniteItems(),
+                set: (v) => CheatManager.setInfiniteItems(v)
+            }
+        ];
+        list.push(...buildItemLikeDescriptors(typeof $dataItems !== "undefined" ? $dataItems : null));
+        return list;
     }
     function buildArmorsDescriptors() {
         return buildItemLikeDescriptors(typeof $dataArmors !== "undefined" ? $dataArmors : null);

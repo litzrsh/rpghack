@@ -18,6 +18,7 @@
         --blue: #0066ff;
         --green: #39ff14;
         --red: #ff3b5c;
+        --crimson: #ff0055;
         --text: #d8f8ff;
         --text-dim: #7a8a90;
         --font-mono: "Consolas", "SFMono-Regular", "Cascadia Code", "Courier New", monospace;
@@ -246,28 +247,34 @@
         letter-spacing: 0.1em;
     }
 
-    /* Centered inject button */
+    /* Centered inject / uninstall buttons */
     .inject-row {
         display: flex;
+        flex-wrap: wrap;
         justify-content: center;
+        gap: 20px;
         margin-bottom: 28px;
     }
 
-    .inject-button {
+    .inject-button,
+    .uninstall-button {
         position: relative;
         padding: 16px 48px;
         font-family: var(--font-mono);
         font-size: 1rem;
         font-weight: 700;
         letter-spacing: 0.08em;
-        color: #04181a;
-        background: linear-gradient(135deg, var(--cyan), var(--blue));
         border: none;
         border-radius: 6px;
         cursor: pointer;
+        transition: transform 0.12s ease, box-shadow 0.2s ease;
+    }
+
+    .inject-button {
+        color: #04181a;
+        background: linear-gradient(135deg, var(--cyan), var(--blue));
         box-shadow: 0 0 16px rgba(0, 240, 255, 0.45), 0 0 40px rgba(0, 102, 255, 0.25);
         animation: pulse-glow 2.2s ease-in-out infinite;
-        transition: transform 0.12s ease, box-shadow 0.2s ease;
     }
 
     .inject-button:hover {
@@ -277,7 +284,25 @@
 
     .inject-button:active { transform: translateY(0); }
 
-    .inject-button:disabled {
+    /* Uninstall: deep crimson warning theme, deliberately distinct from the
+       cyan inject button so a destructive action never gets clicked by
+       accident. */
+    .uninstall-button {
+        color: #1a0006;
+        background: linear-gradient(135deg, var(--crimson), #8a0033);
+        box-shadow: 0 0 16px rgba(255, 0, 85, 0.45), 0 0 40px rgba(138, 0, 51, 0.25);
+        animation: pulse-glow-crimson 2.2s ease-in-out infinite;
+    }
+
+    .uninstall-button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 0 26px rgba(255, 0, 85, 0.8), 0 0 64px rgba(138, 0, 51, 0.5);
+    }
+
+    .uninstall-button:active { transform: translateY(0); }
+
+    .inject-button:disabled,
+    .uninstall-button:disabled {
         cursor: not-allowed;
         opacity: 0.55;
         animation: none;
@@ -287,6 +312,11 @@
     @keyframes pulse-glow {
         0%, 100% { box-shadow: 0 0 16px rgba(0, 240, 255, 0.45), 0 0 40px rgba(0, 102, 255, 0.25); }
         50% { box-shadow: 0 0 26px rgba(0, 240, 255, 0.85), 0 0 60px rgba(0, 102, 255, 0.45); }
+    }
+
+    @keyframes pulse-glow-crimson {
+        0%, 100% { box-shadow: 0 0 16px rgba(255, 0, 85, 0.45), 0 0 40px rgba(138, 0, 51, 0.25); }
+        50% { box-shadow: 0 0 26px rgba(255, 0, 85, 0.9), 0 0 60px rgba(138, 0, 51, 0.5); }
     }
 
     /* ================= Zone 3: Console terminal ================= */
@@ -381,9 +411,10 @@
         </section>
     </div>
 
-    <!-- Centered inject button -->
+    <!-- Centered inject / uninstall buttons -->
     <div class="inject-row">
         <button id="inject-button" class="inject-button" type="button">[ INJECT CHEAT ENGINE ]</button>
+        <button id="uninstall-button" class="uninstall-button" type="button">[ UNINSTALL CHEAT ENGINE ]</button>
     </div>
 
     <!-- ================= Zone 3: Console terminal ================= -->
@@ -409,6 +440,7 @@
     const cheatSelect = document.getElementById("cheat-select");
     const manualRjIdInput = document.getElementById("manual-rj-id");
     const injectButton = document.getElementById("inject-button");
+    const uninstallButton = document.getElementById("uninstall-button");
     const terminalEl = document.getElementById("terminal");
     const terminalStatusEl = document.getElementById("terminal-status");
     const badgeEl = document.getElementById("engine-badge");
@@ -487,42 +519,33 @@
     }
 
     //-------------------------------------------------------------
-    // Inject: POST /api/inject and stream the response line by line
+    // Shared streaming request helper -- used by both Inject and Uninstall.
+    // POSTs to `url` and renders each newline-delimited LOG:/ERROR:/DONE:
+    // chunk into the terminal as it arrives; `onDone(payload)` renders the
+    // final success line for whichever action is running.
     //-------------------------------------------------------------
     function setBusy(busy) {
         injectButton.disabled = busy;
+        uninstallButton.disabled = busy;
         terminalStatusEl.textContent = busy ? "running..." : "idle";
     }
 
-    async function inject() {
-        const payload = {
-            gameDir: gameDirInput.value.trim(),
-            selectedCheat: cheatSelect.value,
-            manualRjId: manualRjIdInput.value.trim(),
-            backupEnabled: backupToggle.checked
-        };
-
-        if (!payload.gameDir) {
-            appendLine("Please enter the target game folder path first.", "error");
-            return;
-        }
-
+    async function runStreamedRequest(url, payload, onDone) {
         setBusy(true);
-        appendLine("Starting injection...", "system");
-
         try {
-            const response = await fetch("/api/inject", {
+            const response = await fetch(url, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload)
             });
 
+            const processLine = (rawLine) => processStreamLine(rawLine, onDone);
+
             if (!response.body) {
                 // Extremely old browsers without streaming fetch: fall back
                 // to reading the whole response at once.
                 const text = await response.text();
-                text.split("\n").forEach(processStreamLine);
-                setBusy(false);
+                text.split("\n").forEach(processLine);
                 return;
             }
 
@@ -536,9 +559,9 @@
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split("\n");
                 buffer = lines.pop(); // last (possibly incomplete) line stays buffered
-                lines.forEach(processStreamLine);
+                lines.forEach(processLine);
             }
-            if (buffer) processStreamLine(buffer);
+            if (buffer) processLine(buffer);
         } catch (err) {
             appendLine("Connection error: " + err.message, "error");
         } finally {
@@ -546,7 +569,7 @@
         }
     }
 
-    function processStreamLine(rawLine) {
+    function processStreamLine(rawLine, onDone) {
         const line = rawLine.trim();
         if (!line) return;
 
@@ -571,16 +594,61 @@
         } else if (tag === "ERROR") {
             appendLine(payload.message, "error");
         } else if (tag === "DONE") {
-            appendLine(
-                "Installation finished successfully (" + payload.engine + (payload.cheatFile ? ", cheat: " + payload.cheatFile : "") + ").",
-                "success"
-            );
+            onDone(payload);
         } else {
             appendLine(line, "log");
         }
     }
 
+    //-------------------------------------------------------------
+    // Inject: POST /api/inject and stream the response line by line
+    //-------------------------------------------------------------
+    async function inject() {
+        const payload = {
+            gameDir: gameDirInput.value.trim(),
+            selectedCheat: cheatSelect.value,
+            manualRjId: manualRjIdInput.value.trim(),
+            backupEnabled: backupToggle.checked
+        };
+
+        if (!payload.gameDir) {
+            appendLine("Please enter the target game folder path first.", "error");
+            return;
+        }
+
+        appendLine("Starting injection...", "system");
+        await runStreamedRequest("/api/inject", payload, (donePayload) => {
+            appendLine(
+                "Installation finished successfully (" + donePayload.engine +
+                    (donePayload.cheatFile ? ", cheat: " + donePayload.cheatFile : "") + ").",
+                "success"
+            );
+        });
+    }
+
+    //-------------------------------------------------------------
+    // Uninstall: POST /api/uninstall and stream the restoration log.
+    // Confirms first since this deletes files and rewrites plugins.js.
+    //-------------------------------------------------------------
+    async function uninstallCheatEngine() {
+        const payload = { gameDir: gameDirInput.value.trim() };
+
+        if (!payload.gameDir) {
+            appendLine("Please enter the target game folder path first.", "error");
+            return;
+        }
+        if (!confirm("This will remove Cheat Engine from:\n\n" + payload.gameDir + "\n\nContinue?")) {
+            return;
+        }
+
+        appendLine("Starting uninstall...", "system");
+        await runStreamedRequest("/api/uninstall", payload, (donePayload) => {
+            appendLine("Uninstall finished successfully (" + donePayload.engine + ").", "success");
+        });
+    }
+
     injectButton.addEventListener("click", inject);
+    uninstallButton.addEventListener("click", uninstallCheatEngine);
 
     //-------------------------------------------------------------
     // Tell the server to shut itself down once this tab is closed, so a
