@@ -211,7 +211,7 @@
     // deliberate, self-contained overlay instead of a stretched-out window.
     const NUMBER_INPUT_WIDTH = 340;
     const NUMBER_INPUT_HEIGHT = 140;
-    const NUMBER_INPUT_BG_COLOR = "rgba(4, 10, 14, 0.88)";
+    const NUMBER_INPUT_BG_COLOR = "rgba(4, 10, 14, 0.94)"; // ~240/255, matching the other cheat windows' backOpacity
     const NUMBER_INPUT_BORDER_COLOR = "#00f0ff";
     const NUMBER_INPUT_CORNER_RADIUS = 14;
     const NUMBER_INPUT_DIGIT_MARGIN_X = 20;
@@ -604,6 +604,10 @@
             } else {
                 super.initialize(x, y);
             }
+            // Default RPG Maker backOpacity (192) lets the map show through
+            // enough to clash with the cheat text on top of it; push it much
+            // darker/more opaque so the tab bar stays readable over any map.
+            this.backOpacity = 240;
         }
         windowWidth() {
             return Graphics.boxWidth;
@@ -668,6 +672,10 @@
             } else {
                 super.initialize(x, y);
             }
+            // Same readability fix as Window_CheatTab: a much darker/more
+            // opaque background so cheat values never wash out against the
+            // map or battle scene behind this window.
+            this.backOpacity = 240;
         }
         windowWidth() {
             return this._cheatWidth || Graphics.boxWidth;
@@ -963,8 +971,12 @@
             }
             // Hide the windowskin-drawn back/frame/cursor entirely; contents
             // (everything drawn below) stays fully visible via the separate
-            // contentsOpacity property.
+            // contentsOpacity property. backOpacity is set for consistency
+            // with the other cheat windows, though with opacity 0 the actual
+            // darkness/readability here comes from NUMBER_INPUT_BG_COLOR's
+            // own alpha in _drawPanelBackground() instead.
             this.opacity = 0;
+            this.backOpacity = 240;
             this.deactivate();
             this.hide();
         }
