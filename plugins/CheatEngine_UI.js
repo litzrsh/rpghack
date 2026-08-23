@@ -206,6 +206,19 @@
     const SKILLS_TAB_COLUMNS = 3;
     const TAB_MAX_COLS = 5;
 
+    // Window_CheatNumberInput layout/theme: a compact, fixed-size dialog
+    // rather than one sized off the digit count, so it always reads as a
+    // deliberate, self-contained overlay instead of a stretched-out window.
+    const NUMBER_INPUT_WIDTH = 340;
+    const NUMBER_INPUT_HEIGHT = 140;
+    const NUMBER_INPUT_BG_COLOR = "rgba(4, 10, 14, 0.88)";
+    const NUMBER_INPUT_BORDER_COLOR = "#00f0ff";
+    const NUMBER_INPUT_CORNER_RADIUS = 14;
+    const NUMBER_INPUT_DIGIT_MARGIN_X = 20;
+    const NUMBER_INPUT_DIGIT_TOP = 26;
+    const NUMBER_INPUT_DIGIT_HEIGHT = 44;
+    const NUMBER_INPUT_LEGEND_TEXT = "[Enter] Confirm  |  [Esc] Cancel  |  [◀/▶] Move Digit";
+
     //-------------------------------------------------------------------
     // A ledger that remembers each party member's parameter bonus amounts.
     // Game_BattlerBase#addParam(paramId, value) can only add a relative
@@ -857,12 +870,19 @@
 
             this.changePaintOpacity(true);
         }
-        // Fits all three columns [icon+name] - [Qty: N] - [Infinite Lock:
-        // ON/OFF] onto a single line. The name column takes up whatever width
-        // remains after the other two fixed-width columns.
+        // Three independent columns -- [icon+name] / [Qty] / [Lock status] --
+        // laid out by anchoring each right-aligned column to a fixed pixel
+        // offset from the rect's right edge, rather than two adjacent
+        // fixed-width boxes flush against each other. That gap between the
+        // two anchors (180px and 40px) is what keeps "Qty: 0" and
+        // "[Lock: ON]" from ever visually crowding into each other on a
+        // narrow value like "0".
         _drawItemRow(desc, rect) {
-            const qtyColWidth = 130;
-            const fixedColWidth = 170;
+            const QTY_RIGHT_OFFSET = 180;
+            const LOCK_RIGHT_OFFSET = 40;
+            const QTY_COL_WIDTH = 110;
+            const LOCK_COL_WIDTH = 130;
+            const NAME_GAP = 10;
             const iconWidth = desc.item && desc.item.iconIndex ? 36 : 0;
 
             let x = rect.x;
@@ -870,16 +890,22 @@
                 this.drawIcon(desc.item.iconIndex, x, rect.y + 2);
                 x += iconWidth;
             }
-            const nameWidth = Math.max(0, rect.width - iconWidth - qtyColWidth - fixedColWidth);
+
+            const qtyRight = rect.x + rect.width - QTY_RIGHT_OFFSET;
+            const qtyX = qtyRight - QTY_COL_WIDTH;
+            const nameWidth = Math.max(0, qtyX - NAME_GAP - x);
             this.drawText(desc.name, x, rect.y, nameWidth, "left");
 
-            const qtyX = rect.x + rect.width - fixedColWidth - qtyColWidth;
-            this.drawText(`Qty: ${desc.get()}`, qtyX, rect.y, qtyColWidth, "right");
+            this.resetTextColor();
+            this.drawText(`Qty: ${desc.get()}`, qtyX, rect.y, QTY_COL_WIDTH, "right");
 
-            const fixedX = rect.x + rect.width - fixedColWidth;
+            const lockRight = rect.x + rect.width - LOCK_RIGHT_OFFSET;
+            const lockX = lockRight - LOCK_COL_WIDTH;
             const locked = desc.isLocked();
-            if (locked) this.changeTextColor(RpgBridge.textColor(this, 17)); // reuse the "power up" color
-            this.drawText(`Infinite Lock: ${locked ? "ON" : "OFF"}`, fixedX, rect.y, fixedColWidth, "right");
+            // High-contrast gold for ON, subtle gray for OFF -- immediately
+            // readable regardless of the current windowskin's own palette.
+            this.changeTextColor(locked ? "#ffd700" : "#8a8f96");
+            this.drawText(`[Lock: ${locked ? "ON" : "OFF"}]`, lockX, rect.y, LOCK_COL_WIDTH, "right");
             this.resetTextColor();
         }
         // Grid (Skills): name plus a short ON/OFF indicator in a narrow cell.
@@ -919,7 +945,11 @@
     }
 
     //-------------------------------------------------------------------
-    // Window_CheatNumberInput: a Shift-triggered direct-input (digit-editing) overlay.
+    // Window_CheatNumberInput: a Shift-triggered direct-input (digit-editing)
+    // overlay, reskinned as a compact sci-fi dial: the native windowskin
+    // back/frame/cursor are hidden entirely (opacity = 0) and replaced with a
+    // hand-drawn dark glass panel, a glowing neon border, oversized digits,
+    // and floating ▲/▼ arrows over whichever digit is currently selected.
     //-------------------------------------------------------------------
     class Window_CheatNumberInput extends Window_Selectable {
         initialize(x, y, width, height) {
@@ -931,6 +961,10 @@
             } else {
                 super.initialize(x, y, width, height);
             }
+            // Hide the windowskin-drawn back/frame/cursor entirely; contents
+            // (everything drawn below) stays fully visible via the separate
+            // contentsOpacity property.
+            this.opacity = 0;
             this.deactivate();
             this.hide();
         }
@@ -941,10 +975,17 @@
             return this._maxDigits;
         }
         itemWidth() {
-            return 32;
+            const cw = this.contents ? this.contents.width : NUMBER_INPUT_WIDTH;
+            const available = Math.max(10, cw - NUMBER_INPUT_DIGIT_MARGIN_X * 2);
+            return Math.floor(available / Math.max(1, this._maxDigits));
         }
-        spacing() {
-            return 0;
+        // Fully custom placement (rather than the default row/col + spacing
+        // math) so every digit cell sits exactly on the dial's digit row,
+        // regardless of how many digits this particular value needs.
+        itemRect(index) {
+            const width = this.itemWidth();
+            const x = NUMBER_INPUT_DIGIT_MARGIN_X + index * width;
+            return new Rectangle(x, NUMBER_INPUT_DIGIT_TOP, width, NUMBER_INPUT_DIGIT_HEIGHT);
         }
         setup(descriptor) {
             this._descriptor = descriptor;
@@ -989,11 +1030,78 @@
             this.refresh();
             SoundManager.playCursor();
         }
+        // Draw order: dark glass panel + neon border first (bottom layer),
+        // then every digit (via the inherited per-item loop, calling our
+        // drawItem() override below), then the dial arrows over the active
+        // digit and the instruction legend on top of everything.
+        drawAllItems() {
+            this._drawPanelBackground();
+            super.drawAllItems();
+            this._drawDialArrows();
+            this._drawLegend();
+        }
+        // Dark, semi-transparent glass panel with rounded corners and a
+        // thin, glowing neon cyan border, drawn directly via the contents
+        // bitmap's underlying canvas context (Bitmap has no built-in
+        // rounded-rect/stroke helpers of its own).
+        _drawPanelBackground() {
+            if (!this.contents) return;
+            const w = this.contents.width;
+            const h = this.contents.height;
+            const r = NUMBER_INPUT_CORNER_RADIUS;
+            const ctx = this.contents.context;
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(r, 0);
+            ctx.arcTo(w, 0, w, h, r);
+            ctx.arcTo(w, h, 0, h, r);
+            ctx.arcTo(0, h, 0, 0, r);
+            ctx.arcTo(0, 0, w, 0, r);
+            ctx.closePath();
+            ctx.fillStyle = NUMBER_INPUT_BG_COLOR;
+            ctx.fill();
+            ctx.shadowColor = NUMBER_INPUT_BORDER_COLOR;
+            ctx.shadowBlur = 10;
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = NUMBER_INPUT_BORDER_COLOR;
+            ctx.stroke();
+            ctx.restore();
+            this.contents._setDirty();
+        }
+        // Large, clean, high-contrast digits -- the currently active digit
+        // rendered bigger and pure white, the rest dimmed, so the dial's
+        // current focus is unmistakable at a glance.
         drawItem(index) {
+            if (!this.contents) return;
             const rect = this.itemRect(index);
             const s = this._number.padZero(this._maxDigits);
-            this.resetTextColor();
+            const isActive = index === this.index();
+            this.contents.fontSize = Math.min(isActive ? 34 : 28, rect.width - 4);
+            this.changeTextColor(isActive ? "#ffffff" : "#7fb8c9");
             this.drawText(s[index], rect.x, rect.y, rect.width, "center");
+            this.resetFontSettings();
+        }
+        // Elegant ▲/▼ dial-arrow indicators floating directly above/below
+        // the active digit, replacing the native cursor box that opacity=0
+        // hides.
+        _drawDialArrows() {
+            if (!this.contents) return;
+            const rect = this.itemRect(this.index());
+            this.contents.fontSize = 18;
+            this.changeTextColor(NUMBER_INPUT_BORDER_COLOR);
+            this.drawText("▲", rect.x, rect.y - 20, rect.width, "center");
+            this.drawText("▼", rect.x, rect.y + rect.height + 2, rect.width, "center");
+            this.resetFontSettings();
+        }
+        // Small, muted instruction legend along the bottom edge of the panel.
+        _drawLegend() {
+            if (!this.contents) return;
+            const w = this.contents.width;
+            const y = this.contents.height - 20;
+            this.contents.fontSize = 14;
+            this.changeTextColor("#8a99a6");
+            this.drawText(NUMBER_INPUT_LEGEND_TEXT, 4, y, w - 8, "center");
+            this.resetFontSettings();
         }
     }
 
@@ -1034,8 +1142,8 @@
             this.addWindow(this._contentWindow);
         }
         createNumberInputWindow() {
-            const width = 8 * 32 + WINDOW_PADDING * 2;
-            const height = panelHeight(1);
+            const width = NUMBER_INPUT_WIDTH;
+            const height = NUMBER_INPUT_HEIGHT;
             const x = (Graphics.boxWidth - width) / 2;
             const y = (Graphics.boxHeight - height) / 2;
             this._numberInputWindow = new Window_CheatNumberInput(x, y, width, height);

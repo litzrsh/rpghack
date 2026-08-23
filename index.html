@@ -182,6 +182,29 @@
 
     .warning-label.visible { display: block; }
 
+    /* Collapsible manual-entry section: expands/fades in only when
+       "[ + Register New Game ID ]" is chosen from the dropdown above it.
+       Animating grid-template-rows (0fr -> 1fr) is the standard trick for a
+       smooth height transition without knowing the content's pixel height
+       up front. */
+    .collapse {
+        display: grid;
+        grid-template-rows: 0fr;
+        opacity: 0;
+        transition: grid-template-rows 0.3s ease, opacity 0.25s ease;
+    }
+
+    .collapse.expanded {
+        grid-template-rows: 1fr;
+        opacity: 1;
+    }
+
+    .collapse-inner {
+        overflow: hidden;
+        min-height: 0;
+        padding-top: 18px;
+    }
+
     /* ================= Zone 2: Hybrid control panel ================= */
     .control-grid {
         display: grid;
@@ -248,14 +271,6 @@
         transform: translateX(20px);
         background: var(--cyan);
         box-shadow: 0 0 8px var(--cyan);
-    }
-
-    .divider-or {
-        text-align: center;
-        font-size: 0.7rem;
-        color: var(--text-dim);
-        margin: 14px 0;
-        letter-spacing: 0.1em;
     }
 
     /* Centered inject / uninstall buttons */
@@ -408,17 +423,21 @@
         <section class="panel">
             <h2>Cheat File Selector</h2>
             <div class="field">
-                <label for="cheat-select">Scanned custom cheats (custom_cheats/)</label>
+                <label for="cheat-select">Custom cheat / Game ID</label>
                 <select id="cheat-select">
                     <option value="">-- Core engine only --</option>
                 </select>
+                <p class="hint">Pick a previously scanned cheat, or choose "Register New Game ID" to enter one manually.</p>
             </div>
-            <div class="divider-or">— OR MANUAL ENTRY —</div>
-            <div class="field">
-                <label for="manual-id">Direct Game ID</label>
-                <input type="text" id="manual-id" placeholder="Steam_123450" autocomplete="off" spellcheck="false" />
-                <p class="hint">Used only if no file above is selected. Generates a skeleton cheat tab, installed as CheatEngine_{ID}.js.</p>
-                <p id="reserved-id-warning" class="warning-label">⚠️ "Core" and "UI" are reserved system keywords. Please use a unique Game ID.</p>
+            <div id="manual-id-collapse" class="collapse">
+                <div class="collapse-inner">
+                    <div class="field">
+                        <label for="manual-id">Direct Game ID</label>
+                        <input type="text" id="manual-id" placeholder="Steam_123450" autocomplete="off" spellcheck="false" />
+                        <p class="hint">Generates a skeleton cheat tab, installed as CheatEngine_{ID}.js.</p>
+                        <p id="reserved-id-warning" class="warning-label">⚠️ "Core" and "UI" are reserved system keywords. Please use a unique Game ID.</p>
+                    </div>
+                </div>
             </div>
         </section>
     </div>
@@ -450,9 +469,18 @@
     const gameDirInput = document.getElementById("game-dir");
     const backupToggle = document.getElementById("backup-toggle");
     const cheatSelect = document.getElementById("cheat-select");
+    const manualIdCollapseEl = document.getElementById("manual-id-collapse");
     const manualIdInput = document.getElementById("manual-id");
     const reservedIdWarningEl = document.getElementById("reserved-id-warning");
     const injectButton = document.getElementById("inject-button");
+
+    // Sentinel dropdown value that switches the merged control into manual
+    // entry mode -- kept out of the normal scanned-file value space since a
+    // real filename can never equal this.
+    const MANUAL_OPTION_VALUE = "__manual__";
+    function isManualModeActive() {
+        return cheatSelect.value === MANUAL_OPTION_VALUE;
+    }
     const uninstallButton = document.getElementById("uninstall-button");
     const terminalEl = document.getElementById("terminal");
     const terminalStatusEl = document.getElementById("terminal-status");
@@ -547,18 +575,40 @@
             }
         } catch (err) {
             appendLine("Failed to scan custom_cheats/: " + err.message, "error");
+        } finally {
+            // Always appended last, regardless of how many scanned entries
+            // came back, so manual entry stays at the very bottom of the list.
+            const manualOpt = document.createElement("option");
+            manualOpt.value = MANUAL_OPTION_VALUE;
+            manualOpt.textContent = "[ + Register New Game ID (Manual Entry) ]";
+            cheatSelect.appendChild(manualOpt);
         }
     }
 
     //-------------------------------------------------------------
+    // Merged selector behavior: choosing the manual-entry sentinel option
+    // smoothly reveals the Direct Game ID field below it; choosing anything
+    // else (a scanned cheat, or "Core engine only") smoothly hides it again.
+    //-------------------------------------------------------------
+    function updateManualEntryVisibility() {
+        const active = isManualModeActive();
+        manualIdCollapseEl.classList.toggle("expanded", active);
+        if (active) manualIdInput.focus();
+        validateManualId();
+    }
+    cheatSelect.addEventListener("change", updateManualEntryVisibility);
+
+    //-------------------------------------------------------------
     // Manual Game ID field: live guardrail against the reserved "Core" /
     // "UI" system IDs -- disables Inject and shows a warning immediately,
-    // rather than waiting for the server to reject the request.
+    // rather than waiting for the server to reject the request. Only
+    // enforced while manual entry mode is actually active.
     //-------------------------------------------------------------
     let manualIdIsReserved = false;
     function validateManualId() {
+        const active = isManualModeActive();
         const id = manualIdInput.value.trim();
-        manualIdIsReserved = id !== "" && isReservedId(id);
+        manualIdIsReserved = active && id !== "" && isReservedId(id);
         reservedIdWarningEl.classList.toggle("visible", manualIdIsReserved);
         refreshButtonStates();
     }
@@ -670,10 +720,11 @@
     // Inject: POST /api/inject and stream the response line by line
     //-------------------------------------------------------------
     async function inject() {
+        const manual = isManualModeActive();
         const payload = {
             gameDir: gameDirInput.value.trim(),
-            selectedCheat: cheatSelect.value,
-            manualId: manualIdInput.value.trim(),
+            selectedCheat: manual ? "" : cheatSelect.value,
+            manualId: manual ? manualIdInput.value.trim() : "",
             backupEnabled: backupToggle.checked
         };
 
