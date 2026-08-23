@@ -77,13 +77,35 @@ var CheatManager = CheatManager || null;
     const PARAMS = (typeof PluginManager !== "undefined" ? PluginManager.parameters(PLUGIN_NAME) : {}) || {};
     const PERSIST_CHEAT_STATE_ON_LOAD = paramBool(PARAMS, "persistCheatStateOnLoad", false);
 
-    // When Fast Message Skip is on and a message is currently being shown,
-    // this is how many extra times per render frame SceneManager.updateScene()
-    // (a pure logic update -- no rendering, input polling, or scene change)
-    // gets run. To make sure this is noticeably faster than the test-play
-    // Ctrl-key 4x speed-up, the base 1 update (already performed by
-    // SceneManager.updateMain) plus this extra amount adds up to a total of 8.
-    const MESSAGE_SKIP_EXTRA_UPDATES = 7;
+    // While Fast Message Skip is on and an event is auto-running on the map
+    // (not while the player is choosing something -- see isWaitingForPlayerInput()
+    // below), this is how many total "world simulation" updates
+    // ($gameMap/$gamePlayer/$gameTimer/$gameScreen) run per real render
+    // frame. The test-play Ctrl key is typically a 3x-4x speed-up, so 6x is
+    // comfortably faster while still being stable (it only re-runs the map's
+    // own update methods, never the full Scene_Map#update(), so it can never
+    // cause input from a message/choice window to be double-processed).
+    const MAP_FAST_FORWARD_MULTIPLIER = 6;
+
+    // True while the player needs to make an active choice: a choice list,
+    // a number-input window, or an item-choice window is open.
+    // $gameMessage.isBusy() alone stays true throughout all of these too, so
+    // relying on isBusy() alone to decide "should we fast-forward?" used to
+    // let the skip cheat's frame acceleration run while these windows were
+    // open. Extra forced updates on top of a single real input poll made the
+    // same button press get processed multiple times in one frame and caused
+    // the choice UI to flicker/redraw incorrectly. Every fast-forward hook
+    // below checks this first and falls back to plain, unaccelerated 1x
+    // behavior whenever it's true, so the player always sees and selects
+    // options normally and stably.
+    function isWaitingForPlayerInput() {
+        if (typeof $gameMessage === "undefined" || !$gameMessage) return false;
+        return (
+            (typeof $gameMessage.isChoice === "function" && $gameMessage.isChoice()) ||
+            (typeof $gameMessage.isNumberInput === "function" && $gameMessage.isNumberInput()) ||
+            (typeof $gameMessage.isItemChoice === "function" && $gameMessage.isItemChoice())
+        );
+    }
 
     //-------------------------------------------------------------------
     // RpgBridge: a shared abstraction layer for MV / MZ
@@ -451,10 +473,17 @@ var CheatManager = CheatManager || null;
         //      the end-of-sentence pause wait.
         //   2) Bypass wait codes like \.  \| (startWait) and Window_Message's
         //      own wait counter (_waitCount) down to 0.
-        //   3) While a message is showing, increase how many times per frame
-        //      SceneManager.updateMain()'s logic update (updateScene) runs,
-        //      up to 8 times, making it clearly faster than the test-play
-        //      Ctrl key's 4x speed.
+        //   3) Render message text instantly instead of one character at a
+        //      time (Window_Message#updateShowFast).
+        //   4) While an event is auto-running on the map, make characters
+        //      actually walk faster, route moves finish sooner, and screen
+        //      tints/fades play back faster too, by hooking Scene_Map
+        //      directly instead of touching the interpreter's wait handling.
+        //
+        //   Every one of these bails out to completely normal, unaccelerated
+        //   behavior whenever isWaitingForPlayerInput() is true (a choice
+        //   list, number input, or item-choice window is open), so choice UI
+        //   never flickers or double-processes a button press.
         //
         //   Deliberately NOT implemented: forcing
         //   Game_Interpreter.prototype.updateWait to always return false while
@@ -464,22 +493,32 @@ var CheatManager = CheatManager || null;
         //   reads a choice result) before the message/choice window has
         //   actually closed. That can break choice branching or otherwise
         //   corrupt event flow as a real gameplay bug, so instead we rely on
-        //   1)-3) above to maximize how fast the message window itself
-        //   progresses.
+        //   1)-4) above.
+        //
+        //   Also deliberately NOT implemented (anymore): looping
+        //   SceneManager.updateMain()/updateScene() extra times per frame.
+        //   That ran the *entire* scene update (including message/choice
+        //   window input handling) multiple times against a single real
+        //   input poll, which is exactly what caused the choice-window
+        //   flicker/double-input bug. The Scene_Map-level hooks in
+        //   _hookMapFastForward() below replace it with a version that only
+        //   re-runs the map's own world-simulation updates.
         _hookMessageSkip() {
             this._hookMessageSkipTrigger();
             this._hookMessageSkipWait();
-            this._hookMessageSkipBurstUpdate();
+            this._hookMessageSkipShowFast();
+            this._hookMapFastForward();
         }
 
         // Forces the message window's "confirm input detected" check to true,
-        // implementing auto-advance.
+        // implementing auto-advance. Skipped while the player is choosing
+        // something, so it can never interfere with choice/number/item input.
         _hookMessageSkipTrigger() {
             if (typeof Window_Message === "undefined") return;
             const manager = this;
             const _isTriggered = Window_Message.prototype.isTriggered;
             Window_Message.prototype.isTriggered = function () {
-                if (manager.isMessageSkip()) return true;
+                if (manager.isMessageSkip() && !isWaitingForPlayerInput()) return true;
                 return _isTriggered.call(this);
             };
         }
@@ -494,23 +533,29 @@ var CheatManager = CheatManager || null;
         // In addition, updateWait() itself is also wrapped so that even if
         // some other plugin sets _waitCount directly without going through
         // startWait(), it's still covered defensively (the end-of-line pause
-        // wait is always forced to 0 immediately while skip is on).
+        // wait is always forced to 0 immediately while skip is on). Both
+        // bypasses turn off automatically while isWaitingForPlayerInput() is
+        // true.
         _hookMessageSkipWait() {
             if (typeof Window_Message === "undefined") return;
             const manager = this;
             const target = Window_Message.prototype;
 
+            function shouldBypassWait() {
+                return manager.isMessageSkip() && !isWaitingForPlayerInput();
+            }
+
             if (typeof target.startWait === "function") {
                 const _startWait = target.startWait;
                 target.startWait = function (count) {
-                    _startWait.call(this, manager.isMessageSkip() ? 0 : count);
+                    _startWait.call(this, shouldBypassWait() ? 0 : count);
                 };
             }
 
             if (typeof target.updateWait === "function") {
                 const _updateWait = target.updateWait;
                 target.updateWait = function () {
-                    if (manager.isMessageSkip() && this._waitCount > 0) {
+                    if (shouldBypassWait() && this._waitCount > 0) {
                         this._waitCount = 0;
                     }
                     return _updateWait.call(this);
@@ -518,48 +563,77 @@ var CheatManager = CheatManager || null;
             }
         }
 
-        // While a message is being shown (busy) and skip is on, in addition
-        // to the one normal update SceneManager.updateMain() already
-        // performed (which includes input polling/scene change/rendering),
-        // run the pure logic update SceneManager.updateScene() up to
-        // MESSAGE_SKIP_EXTRA_UPDATES more times in a row.
-        //   - Only updateScene() is called repeatedly, so input isn't polled
-        //     again, the scene isn't changed again, and the screen isn't
-        //     rendered again multiple times (those three stay exactly as
-        //     performed by the original single updateMain() call).
-        //   - Each iteration re-checks whether a "scene change is in
-        //     progress" or "the message has already finished" and stops
-        //     immediately if so, so even with a fixed iteration count this
-        //     never disturbs scene transition/scene-end timing.
-        //   - This never touches SceneManager._deltaTime/accumulator (which
-        //     setGameSpeed() uses), so it stacks safely and independently of
-        //     the game speed setting.
-        _hookMessageSkipBurstUpdate() {
-            if (
-                typeof SceneManager === "undefined" ||
-                typeof SceneManager.updateMain !== "function" ||
-                typeof SceneManager.updateScene !== "function"
-            ) {
-                return;
-            }
+        // Renders message text instantly (skips the one-character-at-a-time
+        // typewriter effect) while skip is on, by forcing the same
+        // "_showFast" flag the player normally sets by holding the confirm
+        // button, and reporting "already at full speed" back to the caller.
+        _hookMessageSkipShowFast() {
+            if (typeof Window_Message === "undefined" || typeof Window_Message.prototype.updateShowFast !== "function") return;
+            const manager = this;
+            const _updateShowFast = Window_Message.prototype.updateShowFast;
+            Window_Message.prototype.updateShowFast = function () {
+                if (manager.isMessageSkip()) {
+                    this._showFast = true;
+                    return true;
+                }
+                return _updateShowFast.call(this);
+            };
+        }
+
+        // Speeds up actual character movement, route moves, and screen
+        // tints/fades while an event is auto-running on the map -- the part
+        // that merely skipping interpreter waits can never affect, since
+        // characters and screen effects animate against real elapsed frames,
+        // not against the interpreter's command queue.
+        //
+        //   - Scene_Map.prototype.isFastForward, where the engine defines it
+        //     (added in later MZ core versions to support holding the OK
+        //     button during an auto-running event), is reused: making it
+        //     return true taps directly into the engine's own native
+        //     updateMainMultiply() double-update logic for free.
+        //   - On top of that, Scene_Map.prototype.update is wrapped to run
+        //     several *additional* $gameMap/$gamePlayer/$gameTimer/$gameScreen
+        //     updates -- never the full Scene_Map#update() again, which would
+        //     also re-run message/choice window input handling multiple
+        //     times against one real input poll and reproduce the old
+        //     flicker bug. Because only the map's own world-simulation
+        //     methods are re-run, this is safe to stack on top of
+        //     isFastForward() above.
+        //   - Both only ever activate while $gameMap.isEventRunning() and
+        //     isWaitingForPlayerInput() is false, so manual player-controlled
+        //     walking and any open choice/number/item window are completely
+        //     unaffected.
+        _hookMapFastForward() {
+            if (typeof Scene_Map === "undefined") return;
             const manager = this;
 
-            function isMessageBusy() {
+            function canFastForward() {
                 return (
                     manager.isMessageSkip() &&
-                    typeof $gameMessage !== "undefined" && $gameMessage &&
-                    typeof $gameMessage.isBusy === "function" && $gameMessage.isBusy()
+                    typeof $gameMap !== "undefined" && $gameMap &&
+                    typeof $gameMap.isEventRunning === "function" && $gameMap.isEventRunning() &&
+                    !isWaitingForPlayerInput()
                 );
             }
 
-            const _updateMain = SceneManager.updateMain;
-            SceneManager.updateMain = function () {
-                _updateMain.call(this);
-                if (!isMessageBusy()) return;
-                for (let i = 0; i < MESSAGE_SKIP_EXTRA_UPDATES; i++) {
-                    if (typeof this.isSceneChanging === "function" && this.isSceneChanging()) break;
-                    if (!isMessageBusy()) break;
-                    this.updateScene();
+            if (typeof Scene_Map.prototype.isFastForward === "function") {
+                const _isFastForward = Scene_Map.prototype.isFastForward;
+                Scene_Map.prototype.isFastForward = function () {
+                    return canFastForward() || _isFastForward.call(this);
+                };
+            }
+
+            const _update = Scene_Map.prototype.update;
+            Scene_Map.prototype.update = function () {
+                _update.apply(this, arguments);
+                if (!canFastForward()) return;
+
+                const active = this.isActive();
+                for (let i = 1; i < MAP_FAST_FORWARD_MULTIPLIER; i++) {
+                    $gameMap.update(active);
+                    $gamePlayer.update(active);
+                    $gameTimer.update(active);
+                    $gameScreen.update();
                 }
             };
         }
