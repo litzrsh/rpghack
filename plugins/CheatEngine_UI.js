@@ -446,8 +446,8 @@
         list.push({
             name: "God Mode (HP/MP 고정)",
             type: "boolean",
-            get: () => CheatManager.isGodMode(),
-            set: (v) => CheatManager.setGodMode(v)
+            get: () => CheatManager.isGodMode(actor.actorId()),
+            set: (v) => CheatManager.setGodMode(actor.actorId(), v)
         });
         list.push({
             name: "즉사 모드 (아군 -> 적)",

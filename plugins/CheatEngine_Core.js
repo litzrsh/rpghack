@@ -123,13 +123,12 @@ var CheatManager = CheatManager || null;
     const PARAMS = (typeof PluginManager !== "undefined" ? PluginManager.parameters(PLUGIN_NAME) : {}) || {};
     const PERSIST_CHEAT_STATE_ON_LOAD = paramBool(PARAMS, "persistCheatStateOnLoad", false);
 
-    // 메시지 초고속 스킵이 켜져 있고 메시지가 표시 중일 때, SceneManager의
-    // 고정 타임스텝(_deltaTime)을 이 값만큼 더 잘게 쪼갠다. MV/MZ 모두
-    // "실제 경과 시간 / _deltaTime"에 비례해 한 렌더 프레임 안에서 게임 로직
-    // update를 몇 번 도는지 정하므로(= setGameSpeed()가 배속을 구현하는 바로
-    // 그 메커니즘), 이렇게 하면 테스트 플레이의 Ctrl 키 초고속 스킵과 동등하거나
-    // 그 이상으로 한 프레임 안에 여러 번의 로직 업데이트가 몰아서 실행된다.
-    const MESSAGE_SKIP_BURST_DIVISOR = 8;
+    // 메시지 초고속 스킵이 켜져 있고 메시지가 표시 중일 때, 한 렌더 프레임 안에서
+    // SceneManager.updateScene()(순수 로직 업데이트, 렌더링/입력폴링/씬전환은
+    // 포함하지 않음)을 이만큼 추가로 더 실행한다. 테스트 플레이 Ctrl 키의
+    // 4배속 업데이트보다 확실히 빠르도록 기본 1회(SceneManager.updateMain이
+    // 이미 실행한 몫) + 이 추가분을 합쳐 총 8회가 되도록 잡는다.
+    const MESSAGE_SKIP_EXTRA_UPDATES = 7;
 
     //-------------------------------------------------------------------
     // RpgBridge : MV / MZ 공통 추상화 계층
@@ -218,7 +217,7 @@ var CheatManager = CheatManager || null;
         constructor() {
             this._state = {
                 messageSkip: false,
-                godMode: false,
+                godModeActorIds: new Set(), // 무적(God Mode)이 켜진 파티원의 actorId만 개별로 담는다
                 instantKillMode: false,
                 moveSpeedMultiplier: 1,
                 gameSpeedMultiplier: 1,
@@ -277,11 +276,24 @@ var CheatManager = CheatManager || null;
         }
 
         // ================= Party / Battle =================
-        setGodMode(flag) {
-            this._state.godMode = !!flag;
+        /**
+         * 파티원 개별 God Mode(HP/MP 고정) ON/OFF. 예전에는 전역 boolean 하나로
+         * 파티 전체에 동시 적용되어, 한 캐릭터 블록에서 켜면 다른 동료들에게도
+         * 그대로 새어나가는 것처럼 보이는 혼선이 있었다. actorId 단위 Set으로
+         * 바꿔서 "이 파티원만" 무적으로 만들 수 있게 한다.
+         */
+        setGodMode(actorId, flag) {
+            const id = Number(actorId);
+            if (!Number.isFinite(id)) return;
+            if (flag) {
+                this._state.godModeActorIds.add(id);
+            } else {
+                this._state.godModeActorIds.delete(id);
+            }
         }
-        isGodMode() {
-            return this._state.godMode;
+        isGodMode(actorId) {
+            const id = Number(actorId);
+            return Number.isFinite(id) && this._state.godModeActorIds.has(id);
         }
 
         setInstantKillMode(flag) {
@@ -409,7 +421,7 @@ var CheatManager = CheatManager || null;
             });
             return {
                 messageSkip: this._state.messageSkip,
-                godMode: this._state.godMode,
+                godModeActorIds: Array.from(this._state.godModeActorIds),
                 instantKillMode: this._state.instantKillMode,
                 moveSpeedMultiplier: this._state.moveSpeedMultiplier,
                 gameSpeedMultiplier: this._state.gameSpeedMultiplier,
@@ -425,7 +437,8 @@ var CheatManager = CheatManager || null;
                 return;
             }
             this.setMessageSkip(data.messageSkip);
-            this.setGodMode(data.godMode);
+            this._state.godModeActorIds.clear();
+            (data.godModeActorIds || []).forEach((actorId) => this.setGodMode(actorId, true));
             this.setInstantKillMode(data.instantKillMode);
             this.setMoveSpeedMultiplier(data.moveSpeedMultiplier);
             this.setGameSpeed(data.gameSpeedMultiplier);
@@ -452,7 +465,7 @@ var CheatManager = CheatManager || null;
         /** 치트 상태를 전부 기본값으로 안전하게 되돌린다 (새 게임 시작, 미저장 로드 등). */
         resetSessionState() {
             this.setMessageSkip(false);
-            this.setGodMode(false);
+            this._state.godModeActorIds.clear();
             this.setInstantKillMode(false);
             this._state.infiniteItemKeys.clear();
             this.clearStatMultipliers();
@@ -474,17 +487,24 @@ var CheatManager = CheatManager || null;
 
         // 메시지 초고속 스킵.
         //   1) "확인 입력 감지"를 강제로 true 처리 -> 문장 끝 대기(pause) 즉시 해제
-        //   2) \.  \| 같은 대기 코드(startWait)를 0으로 바이패스
-        //   3) (현재 비활성화) 메시지가 떠 있는 동안 SceneManager의 로직
-        //      업데이트를 한 프레임에 여러 번 몰아서 실행하는 실험적 기능.
-        //      SceneManager.update를 감싸는 방식이라 부팅 직후(플레이어 입력
-        //      전부터) 매 프레임 실행되는 유일한 신규 코드라서, 검은 화면
-        //      부팅 멈춤 증상의 1순위 용의자로 지목되어 원인 확인 전까지
-        //      호출을 꺼 둔다. 문제없음이 확인되면 아래 줄의 주석만 풀면 된다.
+        //   2) \.  \| 같은 대기 코드(startWait)와 Window_Message 자체의 대기
+        //      카운터(_waitCount)를 0으로 바이패스
+        //   3) 메시지가 떠 있는 동안 SceneManager.updateMain()이 실행하는 로직
+        //      업데이트(updateScene) 횟수를 한 프레임에 최대 8회까지 늘려서,
+        //      테스트 플레이 Ctrl 키의 4배속보다 확실히 빠르게 만든다.
+        //
+        //   의도적으로 구현하지 않은 것: Game_Interpreter.prototype.updateWait를
+        //   messageSkip 중 무조건 false로 만드는 방식은 채택하지 않았다.
+        //   그렇게 하면 "메시지가 끝날 때까지 대기"(setWaitMode('message'))
+        //   자체가 무력화되어, 이벤트 인터프리터가 메시지/선택지 창이 실제로
+        //   닫히기도 전에 다음 커맨드(선택지 결과를 읽는 조건분기 등)를 먼저
+        //   실행해버릴 수 있다. 이는 선택지 분기가 깨지거나 이벤트가 꼬이는
+        //   실제 게임 플레이 버그로 이어지므로, 대신 위 1)~3)만으로 메시지
+        //   창 자체의 진행 속도를 극대화하는 방식을 택했다.
         _hookMessageSkip() {
             this._hookMessageSkipTrigger();
             this._hookMessageSkipWait();
-            // this._hookMessageSkipBurstUpdate(); // TODO: 부팅 멈춤 원인 확인 후 재활성화
+            this._hookMessageSkipBurstUpdate();
         }
 
         // 메시지 창의 "확인 입력 감지"를 강제로 true 처리하여 자동 진행 구현
@@ -503,53 +523,96 @@ var CheatManager = CheatManager || null;
         // MZ는 Window_Base.prototype에 정의되어 있지만 프로토타입 체인을 통해
         // 어느 쪽이든 Window_Message.prototype.startWait로 조회되므로, 이
         // 하나의 지점만 감싸면 두 엔진 모두 안전하게 처리된다.
+        //
+        // 여기에 더해 updateWait() 자체도 감싸서, 다른 플러그인 등이
+        // startWait()를 거치지 않고 _waitCount를 직접 대입하는 경우까지
+        // 방어적으로 커버한다(글자 한 줄이 끝날 때마다의 일시정지 대기를
+        // 스킵 중에는 항상 즉시 0으로 만든다).
         _hookMessageSkipWait() {
-            if (typeof Window_Message === "undefined" || typeof Window_Message.prototype.startWait !== "function") return;
+            if (typeof Window_Message === "undefined") return;
             const manager = this;
             const target = Window_Message.prototype;
-            const _startWait = target.startWait;
-            target.startWait = function (count) {
-                _startWait.call(this, manager.isMessageSkip() ? 0 : count);
-            };
+
+            if (typeof target.startWait === "function") {
+                const _startWait = target.startWait;
+                target.startWait = function (count) {
+                    _startWait.call(this, manager.isMessageSkip() ? 0 : count);
+                };
+            }
+
+            if (typeof target.updateWait === "function") {
+                const _updateWait = target.updateWait;
+                target.updateWait = function () {
+                    if (manager.isMessageSkip() && this._waitCount > 0) {
+                        this._waitCount = 0;
+                    }
+                    return _updateWait.call(this);
+                };
+            }
         }
 
-        // 메시지가 표시 중(busy)이고 스킵이 켜져 있으면, 이번 한 프레임만
-        // SceneManager._deltaTime을 MESSAGE_SKIP_BURST_DIVISOR분의 1로 줄였다가
-        // 원래 값으로 되돌린다. setGameSpeed()로 이미 배속이 걸려 있어도(현재
-        // _deltaTime 값을 기준으로 다시 나누므로) 자연스럽게 곱으로 누적되며,
-        // 메시지가 끝나는 즉시(다음 프레임부터 busy가 false) 원래 속도로 복귀한다.
+        // 메시지가 표시 중(busy)이고 스킵이 켜져 있으면, SceneManager.updateMain()이
+        // 이미 실행한 정상적인 1회 업데이트(입력 폴링/씬 전환/렌더링 포함)에
+        // 더해서, 순수 로직 업데이트인 SceneManager.updateScene()만 최대
+        // MESSAGE_SKIP_EXTRA_UPDATES번 추가로 몰아서 실행한다.
+        //   - updateScene()만 반복 호출하므로 입력을 여러 번 다시 읽거나
+        //     씬을 여러 번 전환하거나 화면을 여러 번 렌더링하지 않는다
+        //     (이 셋은 원래 updateMain() 1회 몫 그대로 유지).
+        //   - 매 반복마다 "씬 전환 중"이거나 "메시지가 이미 끝났음"을 다시
+        //     확인해서 즉시 멈추므로, 반복 횟수가 상수로 고정돼 있어도 씬
+        //     전환/장면 종료 타이밍을 헤집지 않는다.
+        //   - setGameSpeed()가 쓰는 SceneManager._deltaTime/accumulator는
+        //     전혀 건드리지 않으므로 게임 배속 설정과 독립적으로 안전하게
+        //     누적 적용된다.
         _hookMessageSkipBurstUpdate() {
-            if (typeof SceneManager === "undefined" || typeof SceneManager.update !== "function") return;
+            if (
+                typeof SceneManager === "undefined" ||
+                typeof SceneManager.updateMain !== "function" ||
+                typeof SceneManager.updateScene !== "function"
+            ) {
+                return;
+            }
             const manager = this;
-            const _update = SceneManager.update;
-            SceneManager.update = function () {
-                const messageBusy =
+
+            function isMessageBusy() {
+                return (
                     manager.isMessageSkip() &&
                     typeof $gameMessage !== "undefined" && $gameMessage &&
-                    typeof $gameMessage.isBusy === "function" && $gameMessage.isBusy();
-                if (!messageBusy || typeof this._deltaTime !== "number") {
-                    _update.call(this);
-                    return;
-                }
-                const savedDeltaTime = this._deltaTime;
-                this._deltaTime = savedDeltaTime / MESSAGE_SKIP_BURST_DIVISOR;
-                try {
-                    _update.call(this);
-                } finally {
-                    this._deltaTime = savedDeltaTime;
+                    typeof $gameMessage.isBusy === "function" && $gameMessage.isBusy()
+                );
+            }
+
+            const _updateMain = SceneManager.updateMain;
+            SceneManager.updateMain = function () {
+                _updateMain.call(this);
+                if (!isMessageBusy()) return;
+                for (let i = 0; i < MESSAGE_SKIP_EXTRA_UPDATES; i++) {
+                    if (typeof this.isSceneChanging === "function" && this.isSceneChanging()) break;
+                    if (!isMessageBusy()) break;
+                    this.updateScene();
                 }
             };
         }
 
-        // refresh() 이후 파티원 HP/MP를 최대치로 고정 + gainHp 음수 변화 무시
+        // refresh() 이후 "God Mode가 켜진 그 파티원만" HP/MP를 최대치로 고정
+        // + gainHp 음수 변화 무시. actor.actorId()가 있는 파티원에게만 개별로
+        // 적용되므로, 한 캐릭터의 God Mode를 켜도 다른 동료에게는 영향이 없다.
         _hookGodMode() {
             const manager = this;
+
+            function isGodModeActor(battler) {
+                return (
+                    manager._isProtectedBattler(battler) &&
+                    typeof battler.actorId === "function" &&
+                    manager.isGodMode(battler.actorId())
+                );
+            }
 
             if (typeof Game_BattlerBase !== "undefined") {
                 const _refresh = Game_BattlerBase.prototype.refresh;
                 Game_BattlerBase.prototype.refresh = function () {
                     _refresh.call(this);
-                    if (manager.isGodMode() && manager._isProtectedBattler(this)) {
+                    if (isGodModeActor(this)) {
                         this._hp = this.mhp;
                         if (this._mp !== undefined) this._mp = this.mmp;
                         if (typeof this.isDead === "function" && this.isDead() && typeof this.removeState === "function") {
@@ -562,7 +625,7 @@ var CheatManager = CheatManager || null;
             if (typeof Game_Battler !== "undefined") {
                 const _gainHp = Game_Battler.prototype.gainHp;
                 Game_Battler.prototype.gainHp = function (value) {
-                    if (manager.isGodMode() && manager._isProtectedBattler(this) && value < 0) {
+                    if (isGodModeActor(this) && value < 0) {
                         return;
                     }
                     _gainHp.call(this, value);
